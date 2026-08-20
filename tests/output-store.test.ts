@@ -250,6 +250,24 @@ describe("OutputStore implicit reads", () => {
     });
   });
 
+  it("snapshots the complete tail repeatedly without consuming the cursor", () => {
+    const { store } = makeStore({ maxReadBytes: 8, maxReadLines: 2 });
+    store.append("partial-line\none\ntwo\nthree");
+
+    const first = store.snapshotTail();
+    const second = store.snapshotTail();
+
+    expect(first).toMatchObject({
+      content: "three",
+      requestedRange: { start: 0, end: 26 },
+      returnedRange: { start: 21, end: 26 },
+      truncation: { truncated: true },
+      cursor: { before: 0, after: 0, advanced: false },
+    });
+    expect(second).toEqual(first);
+    expect(store.deliveredCursor).toBe(0);
+  });
+
   it("reads through a spill file, advances its cursor, and surfaces the spill path", () => {
     const { store, path } = makeStore({
       maxInMemoryBytes: 4,

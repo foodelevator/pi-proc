@@ -1,4 +1,10 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+
+import { ProcessManager } from "./process-manager";
+import { registerWaitBashTool } from "./tools/bash";
 
 export { OutputStore } from "./output-store";
 export {
@@ -15,6 +21,7 @@ export type {
   ProcessLookupFailure,
   ProcessManagerCallbacks,
   ProcessManagerOptions,
+  ProcessOutputListener,
   ProcessStateFailure,
 } from "./process-manager";
 export {
@@ -33,6 +40,16 @@ export type {
   SpawnShellOptions,
   SupportedPlatform,
 } from "./shell";
+export {
+  bashSchema,
+  BASH_UPDATE_THROTTLE_MS,
+  createWaitBashTool,
+  registerWaitBashTool,
+} from "./tools/bash";
+export type {
+  BackgroundBashToolInput,
+  WaitBashToolOptions,
+} from "./tools/bash";
 export type {
   ByteRange,
   ForegroundExecution,
@@ -57,7 +74,41 @@ export type {
   StartProcessOptions,
 } from "./types";
 
-/** Pi extension entry point. Tool and event registration is added in later stages. */
+function sessionEnvironment(ctx: ExtensionContext) {
+  const model = ctx.model;
+  return {
+    sessionId: ctx.sessionManager.getSessionId(),
+    ...(ctx.sessionManager.getSessionFile() === undefined
+      ? {}
+      : { sessionFile: ctx.sessionManager.getSessionFile() }),
+    ...(model === undefined
+      ? {}
+      : { provider: model.provider, model: model.id }),
+    ...(ctx.thinkingLevel === undefined
+      ? {}
+      : { reasoningLevel: ctx.thinkingLevel }),
+  };
+}
+
+/** Register the wait-compatible override and one manager per Pi session runtime. */
 export default function backgroundProcesses(pi: ExtensionAPI): void {
-  void pi;
+  let manager: ProcessManager | undefined;
+
+  registerWaitBashTool(pi, { getManager: () => manager });
+
+  pi.on("session_start", async (_event, ctx) => {
+    const previous = manager;
+    manager = undefined;
+    if (previous !== undefined) await previous.shutdown();
+    manager = new ProcessManager({
+      cwd: ctx.cwd,
+      sessionEnvironment: () => sessionEnvironment(ctx),
+    });
+  });
+
+  pi.on("session_shutdown", async () => {
+    const current = manager;
+    manager = undefined;
+    if (current !== undefined) await current.shutdown();
+  });
 }

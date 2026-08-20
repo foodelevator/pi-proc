@@ -125,6 +125,7 @@ export class OutputStore {
   #totalBytes = 0;
   #newlineCount = 0;
   #lastByte: number | undefined;
+  #lastLineBytes = 0;
   #deliveredCursor = 0;
   #spillPath: string | undefined;
   #spillFd: number | undefined;
@@ -163,6 +164,11 @@ export class OutputStore {
 
   get deliveredCursor(): number {
     return this.#deliveredCursor;
+  }
+
+  /** Raw UTF-8 byte length of the current final line. */
+  get lastLineBytes(): number {
+    return this.#lastLineBytes;
   }
 
   get spillPath(): string | undefined {
@@ -221,11 +227,25 @@ export class OutputStore {
   }
 
   read(options: OutputReadOptions = {}): OutputReadResult {
+    return this.#read(options, false);
+  }
+
+  /** Return the complete-output tail without consuming the delivered cursor. */
+  snapshotTail(length?: number): OutputReadResult {
+    return this.#read(length === undefined ? {} : { length }, true);
+  }
+
+  #read(
+    options: OutputReadOptions,
+    snapshotTail: boolean,
+  ): OutputReadResult {
     const snapshotEnd = this.#totalBytes;
     const snapshotLines = this.totalLines;
     const cursorBefore = this.#deliveredCursor;
     const explicit = options.start !== undefined;
-    const start = options.start === undefined
+    const start = snapshotTail
+      ? 0
+      : options.start === undefined
       ? cursorBefore
       : requireNonNegativeInteger(options.start, "start");
     const requestedLength = options.length === undefined
@@ -261,6 +281,33 @@ export class OutputStore {
       returnedStart = byteLimitedStart;
       bytes = this.#readBytes(returnedStart, returnedEnd);
 
+      // A byte cap can land inside a UTF-8 sequence. Pi's bash output never
+      // exposes a malformed leading character, so move to the next boundary.
+      let utf8Start = 0;
+      while (
+        utf8Start < bytes.length
+        && (bytes[utf8Start] & 0xc0) === 0x80
+      ) {
+        utf8Start++;
+      }
+      returnedStart += utf8Start;
+      bytes = bytes.subarray(utf8Start);
+
+      // As Pi's tail truncation does, omit a partial first line when complete
+      // later lines are available. Keep the partial tail only when one final
+      // line by itself exceeds the byte budget.
+      if (
+        byteLimitedStart > requestedRange.start
+        && returnedStart > 0
+        && this.#readBytes(returnedStart - 1, returnedStart)[0] !== NEWLINE
+      ) {
+        const firstNewline = bytes.indexOf(NEWLINE);
+        if (firstNewline !== -1 && firstNewline < bytes.length - 1) {
+          returnedStart += firstNewline + 1;
+          bytes = bytes.subarray(firstNewline + 1);
+        }
+      }
+
       const lineLimitedStart = suffixStartForLineLimit(bytes, this.#maxReadLines);
       if (lineLimitedStart > 0) reasons.push("lines");
       returnedStart += lineLimitedStart;
@@ -276,7 +323,7 @@ export class OutputStore {
       0,
     );
 
-    if (!explicit) this.#deliveredCursor = snapshotEnd;
+    if (!explicit && !snapshotTail) this.#deliveredCursor = snapshotEnd;
 
     return {
       content: bytes.toString("utf8"),
@@ -321,6 +368,10 @@ export class OutputStore {
 
   #accountFor(chunk: Buffer): number {
     const chunkNewlines = countNewlines(chunk);
+    const lastNewline = chunk.lastIndexOf(NEWLINE);
+    this.#lastLineBytes = lastNewline === -1
+      ? this.#lastLineBytes + chunk.length
+      : chunk.length - lastNewline - 1;
     this.#totalBytes += chunk.length;
     this.#newlineCount += chunkNewlines;
     this.#lastByte = chunk[chunk.length - 1];

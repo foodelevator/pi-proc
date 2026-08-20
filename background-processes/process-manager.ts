@@ -103,6 +103,11 @@ export class ProcessSpawnError extends Error {
   }
 }
 
+export type ProcessOutputListener = (
+  source: ProcessOutputSource,
+  chunk: Buffer,
+) => void;
+
 export interface ProcessManagerCallbacks {
   onOutput?: (
     execution: ProcessExecution,
@@ -345,6 +350,10 @@ export class ProcessManager {
     Promise<ForegroundExecution | ManagedProcessRecord>
   >();
   readonly #owned = new WeakSet<ProcessExecution>();
+  readonly #outputListeners = new WeakMap<
+    ProcessExecution,
+    Set<ProcessOutputListener>
+  >();
   readonly #historical = new Map<string, HistoricalProcessRecord>();
   #nextProcessNumber: number;
   #acceptingStarts = true;
@@ -401,6 +410,26 @@ export class ProcessManager {
 
   get foregroundExecutions(): readonly ForegroundExecution[] {
     return [...this.#foreground] as ForegroundExecution[];
+  }
+
+  /** Subscribe to combined output after it has been appended to the store. */
+  subscribeOutput(
+    execution: ProcessExecution,
+    listener: ProcessOutputListener,
+  ): () => void {
+    if (!this.#owned.has(execution)) {
+      throw new ProcessStateError(
+        "not-foreground",
+        "Execution is not owned by this manager",
+      );
+    }
+    const listeners = this.#outputListeners.get(execution) ?? new Set();
+    listeners.add(listener);
+    this.#outputListeners.set(execution, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.#outputListeners.delete(execution);
+    };
   }
 
   start(
@@ -720,6 +749,7 @@ export class ProcessManager {
             callSafely(this.#callbacks.onCallbackError, () => {
               this.#callbacks.onOutput?.(execution, source, chunk);
             });
+            this.#notifyOutputListeners(execution, source, chunk);
           }
         },
         onStdoutActivity: (chunk) => {
@@ -795,6 +825,20 @@ export class ProcessManager {
     }
     this.#pendingExecutions.delete(internal);
     return internal;
+  }
+
+  #notifyOutputListeners(
+    execution: InternalProcess,
+    source: ProcessOutputSource,
+    chunk: Buffer,
+  ): void {
+    const listeners = this.#outputListeners.get(execution);
+    if (listeners === undefined) return;
+    for (const listener of [...listeners]) {
+      callSafely(this.#callbacks.onCallbackError, () => {
+        listener(source, chunk);
+      });
+    }
   }
 
   #makePublic(
