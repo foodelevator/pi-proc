@@ -8,6 +8,7 @@ import {
   assertSupportedPlatform,
   createPiProcessEnvironment,
   spawnShellProcess,
+  type DetachedProcessGroupTracker,
   type ShellConfig,
   type SupportedPlatform,
 } from "./shell";
@@ -21,6 +22,7 @@ import type {
   ProcessMode,
   ProcessOutputSource,
   ProcessShutdownResult,
+  ProcessShutdownSignalFailure,
   ProcessSignalResult,
   PublicProcessMode,
   StartProcessOptions,
@@ -130,6 +132,8 @@ export interface ProcessManagerOptions extends ProcessManagerCallbacks {
     | (() => PiSessionEnvironment);
   outputStoreFactory?: () => OutputStore;
   pipeIdleMs?: number;
+  /** Test/custom-runtime seam; defaults to shell.ts process-exit tracking. */
+  detachedProcessGroupTracker?: DetachedProcessGroupTracker;
   terminatingSignalWaitMs?: number;
   shutdownGraceMs?: number;
   shutdownForceWaitMs?: number;
@@ -203,8 +207,13 @@ export function normalizeSignal(signal: string): NodeJS.Signals {
   return normalized as NodeJS.Signals;
 }
 
-export function isNormallyTerminatingSignal(signal: string): boolean {
-  return TERMINATING_SIGNALS.has(normalizeSignal(signal));
+export function isNormallyTerminatingSignal(
+  signal: string,
+  platform: SupportedPlatform = process.platform as SupportedPlatform,
+): boolean {
+  const normalized = normalizeSignal(signal);
+  if (normalized === "SIGIO" && platform === "darwin") return false;
+  return TERMINATING_SIGNALS.has(normalized);
 }
 
 function callSafely(
@@ -323,6 +332,7 @@ export class ProcessManager {
     | (() => PiSessionEnvironment);
   readonly #outputStoreFactory: () => OutputStore;
   readonly #pipeIdleMs: number | undefined;
+  readonly #detachedProcessGroupTracker: DetachedProcessGroupTracker | undefined;
   readonly #terminatingSignalWaitMs: number;
   readonly #shutdownGraceMs: number;
   readonly #shutdownForceWaitMs: number;
@@ -330,6 +340,10 @@ export class ProcessManager {
 
   readonly #records = new Map<string, InternalProcess>();
   readonly #foreground = new Set<InternalProcess>();
+  readonly #pendingExecutions = new Set<InternalProcess>();
+  readonly #pendingStarts = new Set<
+    Promise<ForegroundExecution | ManagedProcessRecord>
+  >();
   readonly #owned = new WeakSet<ProcessExecution>();
   readonly #historical = new Map<string, HistoricalProcessRecord>();
   #nextProcessNumber: number;
@@ -348,6 +362,7 @@ export class ProcessManager {
     this.#outputStoreFactory = options.outputStoreFactory
       ?? (() => new OutputStore({ tempFilePrefix: "pibg-process" }));
     this.#pipeIdleMs = options.pipeIdleMs;
+    this.#detachedProcessGroupTracker = options.detachedProcessGroupTracker;
     this.#terminatingSignalWaitMs = requireNonNegativeTimer(
       options.terminatingSignalWaitMs ?? TERMINATING_SIGNAL_WAIT_MS,
       "terminatingSignalWaitMs",
@@ -396,9 +411,22 @@ export class ProcessManager {
     command: string,
     options?: StartProcessOptions & { mode?: "wait" },
   ): Promise<ForegroundExecution>;
-  async start(
+  start(
     command: string,
     options: StartProcessOptions = {},
+  ): Promise<ForegroundExecution | ManagedProcessRecord> {
+    const operation = this.#startProcess(command, options);
+    this.#pendingStarts.add(operation);
+    const removePending = (): void => {
+      this.#pendingStarts.delete(operation);
+    };
+    void operation.then(removePending, removePending);
+    return operation;
+  }
+
+  async #startProcess(
+    command: string,
+    options: StartProcessOptions,
   ): Promise<ForegroundExecution | ManagedProcessRecord> {
     const mode = options.mode ?? "wait";
     const internal = await this.#spawn(command, mode, options);
@@ -508,7 +536,20 @@ export class ProcessManager {
   }
 
   registerHistoricalProcess(record: HistoricalProcessRecord): void {
-    if (!this.#records.has(record.id)) this.#historical.set(record.id, record);
+    if (this.#records.has(record.id)) return;
+    this.#historical.set(record.id, record);
+
+    const match = /^p([1-9]\d*)$/.exec(record.id);
+    if (match === null) return;
+    const processNumber = Number(match[1]);
+    if (!Number.isSafeInteger(processNumber)) return;
+    if (processNumber === Number.MAX_SAFE_INTEGER) {
+      throw new RangeError(`Historical process ID is too large: ${record.id}`);
+    }
+    this.#nextProcessNumber = Math.max(
+      this.#nextProcessNumber,
+      processNumber + 1,
+    );
   }
 
   get historicalRecords(): readonly HistoricalProcessRecord[] {
@@ -570,7 +611,7 @@ export class ProcessManager {
     const record = this.getActiveProcess(id);
     const normalized = normalizeSignal(signal);
     const sent = this.signalExecution(record, normalized);
-    if (!isNormallyTerminatingSignal(normalized)) {
+    if (!isNormallyTerminatingSignal(normalized, this.#platform)) {
       return { signal: normalized, sent, exited: false };
     }
 
@@ -635,6 +676,12 @@ export class ProcessManager {
         new Error(`Working directory does not exist: ${cwd}`),
       );
     }
+    if (!this.#acceptingStarts) {
+      throw new ProcessStateError(
+        "manager-closed",
+        "Process manager shut down while the command was starting",
+      );
+    }
 
     const sessionEnvironment = options.sessionEnvironment
       ?? (typeof this.#sessionEnvironment === "function"
@@ -662,6 +709,11 @@ export class ProcessManager {
         ...(this.#pipeIdleMs === undefined
           ? {}
           : { pipeIdleMs: this.#pipeIdleMs }),
+        ...(this.#detachedProcessGroupTracker === undefined
+          ? {}
+          : {
+              detachedProcessGroupTracker: this.#detachedProcessGroupTracker,
+            }),
         onOutput: (source, chunk) => {
           const execution = processHolder.current;
           if (execution !== undefined) {
@@ -717,6 +769,15 @@ export class ProcessManager {
     } catch (error) {
       throw new ProcessSpawnError(command, error);
     }
+    if (internal.completedAt === undefined) {
+      this.#pendingExecutions.add(internal);
+    }
+    if (!this.#acceptingStarts) {
+      throw new ProcessStateError(
+        "manager-closed",
+        "Process manager shut down while the command was spawning",
+      );
+    }
 
     if (timeoutMs !== undefined && internal.completedAt === undefined) {
       internal.timeoutHandle = setTimeout(() => {
@@ -732,6 +793,7 @@ export class ProcessManager {
       }, timeoutMs);
       internal.timeoutHandle.unref();
     }
+    this.#pendingExecutions.delete(internal);
     return internal;
   }
 
@@ -763,6 +825,7 @@ export class ProcessManager {
     internal.exitCode = result.exitCode;
     internal.exitSignal = result.exitSignal;
     this.#foreground.delete(internal);
+    this.#pendingExecutions.delete(internal);
 
     const completion: ProcessCompletion = {
       completedAt: internal.completedAt,
@@ -801,6 +864,9 @@ export class ProcessManager {
 
   #activeExecutions(): InternalProcess[] {
     const active = new Set<InternalProcess>();
+    for (const execution of this.#pendingExecutions) {
+      if (execution.completedAt === undefined) active.add(execution);
+    }
     for (const execution of this.#foreground) {
       if (execution.completedAt === undefined) active.add(execution);
     }
@@ -832,12 +898,17 @@ export class ProcessManager {
 
   async #performShutdown(): Promise<ProcessShutdownResult> {
     this.#acceptingStarts = false;
+    await Promise.allSettled([...this.#pendingStarts]);
+
     const active = this.#activeExecutions();
     const signaled: number[] = [];
     const forceKilled: number[] = [];
+    const signalFailures: ProcessShutdownSignalFailure[] = [];
 
     for (const execution of active) {
-      if (this.signalExecution(execution, "SIGTERM")) signaled.push(execution.pid);
+      if (this.#tryShutdownSignal(execution, "SIGTERM", signalFailures)) {
+        signaled.push(execution.pid);
+      }
     }
     await this.#waitForAll(active, this.#shutdownGraceMs);
 
@@ -845,7 +916,7 @@ export class ProcessManager {
       (execution) => execution.completedAt === undefined,
     );
     for (const execution of survivors) {
-      if (this.signalExecution(execution, "SIGKILL")) {
+      if (this.#tryShutdownSignal(execution, "SIGKILL", signalFailures)) {
         forceKilled.push(execution.pid);
       }
     }
@@ -860,6 +931,30 @@ export class ProcessManager {
       execution.outputStore.close();
     }
     for (const record of this.#records.values()) record.outputStore.close();
-    return { signaled, forceKilled };
+    return { signaled, forceKilled, signalFailures };
+  }
+
+  #tryShutdownSignal(
+    execution: InternalProcess,
+    signal: NodeJS.Signals,
+    failures: ProcessShutdownSignalFailure[],
+  ): boolean {
+    try {
+      return this.signalExecution(execution, signal);
+    } catch (error) {
+      const failure: ProcessShutdownSignalFailure = {
+        pid: execution.pid,
+        ...(execution.id === undefined ? {} : { id: execution.id }),
+        signal,
+        error: asError(error),
+      };
+      failures.push(failure);
+      try {
+        this.#callbacks.onCallbackError?.(failure.error);
+      } catch {
+        // Shutdown must continue even if the optional error reporter fails.
+      }
+      return false;
+    }
   }
 }

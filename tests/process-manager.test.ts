@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { constants as osConstants, tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   isNormallyTerminatingSignal,
@@ -14,7 +14,10 @@ import type {
   ProcessLookupError,
   ProcessStateError,
 } from "../background-processes/process-manager";
-import { createPiProcessEnvironment } from "../background-processes/shell";
+import {
+  createPiProcessEnvironment,
+  killTrackedDetachedProcessGroups,
+} from "../background-processes/shell";
 import type { ProcessExecution } from "../background-processes/types";
 
 const managers: ProcessManager[] = [];
@@ -115,6 +118,19 @@ describe("POSIX shell spawning", () => {
       "test-session|/tmp/test-session.jsonl|test-provider|test-model|xhigh",
     );
     expect(base.PI_SESSION_ID).toBe("parent");
+  });
+
+  it("registers detached groups for process-exit crash cleanup", async () => {
+    const baselineExitListeners = process.listenerCount("exit");
+    const processes = manager();
+    const record = await processes.startManaged("sleep 30");
+
+    expect(process.listenerCount("exit")).toBe(baselineExitListeners + 1);
+    killTrackedDetachedProcessGroups();
+    const completion = await record.completion;
+
+    expect(completion.exitSignal).toBe("SIGKILL");
+    expect(process.listenerCount("exit")).toBe(baselineExitListeners);
   });
 
   it("reports asynchronous executable spawn failures without allocating an ID", async () => {
@@ -253,6 +269,37 @@ describe("ProcessManager lifecycle", () => {
     expect(first.outputStore.readRange(0).content).toBe("fast");
   });
 
+  it("rejects and reaps a spawned start racing with shutdown", async () => {
+    const holder: { processes?: ProcessManager } = {};
+    let shutdown: ReturnType<ProcessManager["shutdown"]> | undefined;
+    let trackedPid: number | undefined;
+    const tracker = {
+      track(pid: number) {
+        trackedPid = pid;
+        if (holder.processes === undefined) {
+          throw new Error("Manager was not initialized");
+        }
+        shutdown = holder.processes.shutdown();
+      },
+      untrack() {},
+    };
+    const processes = manager({
+      detachedProcessGroupTracker: tracker,
+      shutdownGraceMs: 20,
+    });
+    holder.processes = processes;
+
+    const starting = processes.startManaged("sleep 30");
+
+    await expect(starting).rejects.toMatchObject({ kind: "manager-closed" });
+    if (shutdown === undefined) throw new Error("Shutdown was not started");
+    const result = await shutdown;
+    expect(result.signaled).toContain(trackedPid);
+    expect(result.signalFailures).toEqual([]);
+    expect(processes.records).toHaveLength(0);
+    expect(processes.activeRecords).toHaveLength(0);
+  });
+
   it("force-kills a public process when its timeout expires after start returns", async () => {
     const processes = manager();
     const record = await processes.startManaged("sleep 30", { timeoutMs: 40 });
@@ -359,6 +406,50 @@ describe("stdin, signals, and shutdown", () => {
     expect(() => processes.getProcess("p999")).toThrowError(
       expect.objectContaining<Partial<ProcessLookupError>>({ kind: "unknown" }),
     );
+
+    const next = await processes.startManaged("true");
+    expect(next.id).toBe("p21");
+    await next.completion;
+  });
+
+  it("contains and reports per-process shutdown signal failures", async () => {
+    const processes = manager({ shutdownGraceMs: 30 });
+    const first = await processes.startManaged(
+      "trap '' TERM; printf first-ready; while :; do sleep 1; done",
+    );
+    const second = await processes.startManaged(
+      "trap '' TERM; printf second-ready; while :; do sleep 1; done",
+    );
+    await Promise.all([
+      waitForOutput(first, "first-ready"),
+      waitForOutput(second, "second-ready"),
+    ]);
+
+    const realKill = process.kill.bind(process);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid === -first.pid && signal === "SIGTERM") {
+        const error = new Error("Operation not permitted") as NodeJS.ErrnoException;
+        error.code = "EPERM";
+        throw error;
+      }
+      return realKill(pid, signal);
+    });
+
+    try {
+      const result = await processes.shutdown();
+
+      expect(result.signaled).toContain(second.pid);
+      expect(result.forceKilled).toContain(first.pid);
+      expect(result.signalFailures).toHaveLength(1);
+      expect(result.signalFailures[0]).toMatchObject({
+        id: first.id,
+        pid: first.pid,
+        signal: "SIGTERM",
+        error: { code: "EPERM" },
+      });
+    } finally {
+      killSpy.mockRestore();
+    }
   });
 
   it("shuts down all groups gracefully, then force-kills survivors", async () => {
@@ -381,6 +472,7 @@ describe("stdin, signals, and shutdown", () => {
       expect.arrayContaining([graceful.pid, stubborn.pid]),
     );
     expect(result.forceKilled).toContain(stubborn.pid);
+    expect(result.signalFailures).toEqual([]);
     expect(graceful.completedAt).toBeDefined();
     expect(stubborn.exitSignal).toBe("SIGKILL");
     await expect(processes.startManaged("true")).rejects.toMatchObject({
@@ -395,6 +487,8 @@ describe("signal helpers", () => {
     expect(isNormallyTerminatingSignal("SIGTERM")).toBe(true);
     expect(isNormallyTerminatingSignal("SIGKILL")).toBe(true);
     expect(isNormallyTerminatingSignal("SIGSTOP")).toBe(false);
+    expect(isNormallyTerminatingSignal("SIGIO", "darwin")).toBe(false);
+    expect(isNormallyTerminatingSignal("SIGIO", "linux")).toBe(true);
     expect(() => normalizeSignal("not-a-signal")).toThrow(RangeError);
     expect(osConstants.signals.SIGTERM).toBeTypeOf("number");
   });

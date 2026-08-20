@@ -16,6 +16,51 @@ export const POST_EXIT_PIPE_IDLE_MS = 100;
 
 export type SupportedPlatform = "darwin" | "linux";
 
+export interface DetachedProcessGroupTracker {
+  track: (pid: number) => void;
+  untrack: (pid: number) => void;
+}
+
+const trackedDetachedProcessGroups = new Set<number>();
+let exitCleanupInstalled = false;
+
+/**
+ * Pi's detached-child registry is not part of its root exports, and its package
+ * exports block direct access to the internal shell module. Keep an equivalent
+ * local registry so Pi's process.exit()-based crash paths still trigger cleanup.
+ */
+export function killTrackedDetachedProcessGroups(): void {
+  for (const pid of trackedDetachedProcessGroups) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // The group may already have exited, or the dying process may lack permission.
+    }
+  }
+}
+
+function handleProcessExit(): void {
+  exitCleanupInstalled = false;
+  killTrackedDetachedProcessGroups();
+}
+
+const defaultDetachedProcessGroupTracker: DetachedProcessGroupTracker = {
+  track(pid) {
+    trackedDetachedProcessGroups.add(pid);
+    if (!exitCleanupInstalled) {
+      exitCleanupInstalled = true;
+      process.once("exit", handleProcessExit);
+    }
+  },
+  untrack(pid) {
+    trackedDetachedProcessGroups.delete(pid);
+    if (trackedDetachedProcessGroups.size === 0 && exitCleanupInstalled) {
+      process.removeListener("exit", handleProcessExit);
+      exitCleanupInstalled = false;
+    }
+  },
+};
+
 export interface ShellConfig {
   shell: string;
   args: string[];
@@ -36,6 +81,8 @@ export interface SpawnShellOptions {
   /** Test seam; production callers should use Pi's getShellConfig resolution. */
   shellConfig?: ShellConfig;
   pipeIdleMs?: number;
+  /** Test/custom-runtime seam. Defaults to pibg's process-exit cleanup registry. */
+  detachedProcessGroupTracker?: DetachedProcessGroupTracker;
   onStdoutActivity?: (chunk: Buffer) => void;
   onOutput?: (source: "stdout" | "stderr", chunk: Buffer) => void;
   onCallbackError?: (error: Error) => void;
@@ -129,6 +176,8 @@ export function spawnShellProcess(
     );
   }
 
+  const processGroupTracker = options.detachedProcessGroupTracker
+    ?? defaultDetachedProcessGroupTracker;
   const child = spawn(
     shellConfig.shell,
     [...shellConfig.args, command],
@@ -166,6 +215,7 @@ export function spawnShellProcess(
   let stdoutEnded = false;
   let stderrEnded = false;
   let idleTimer: NodeJS.Timeout | undefined;
+  let trackedPid: number | undefined;
 
   const reportCallbackError = (error: unknown): void => {
     try {
@@ -191,6 +241,14 @@ export function spawnShellProcess(
     if (settled) return;
     settled = true;
     cleanup();
+    if (trackedPid !== undefined) {
+      try {
+        processGroupTracker.untrack(trackedPid);
+      } catch (error) {
+        reportCallbackError(error);
+      }
+      trackedPid = undefined;
+    }
     child.stdout.destroy();
     child.stderr.destroy();
     options.outputStore.close();
@@ -267,6 +325,21 @@ export function spawnShellProcess(
       const error = new Error("Spawned shell did not provide a process ID");
       rejectSpawned(error);
       processError = error;
+      finalize();
+      return;
+    }
+    try {
+      processGroupTracker.track(child.pid);
+      trackedPid = child.pid;
+    } catch (error) {
+      const trackingError = asError(error);
+      rejectSpawned(trackingError);
+      processError = trackingError;
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        // The process may already have exited.
+      }
       finalize();
       return;
     }

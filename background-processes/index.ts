@@ -20,11 +20,13 @@ export type {
 export {
   assertSupportedPlatform,
   createPiProcessEnvironment,
+  killTrackedDetachedProcessGroups,
   POST_EXIT_PIPE_IDLE_MS,
   spawnShellProcess,
   UnsupportedPlatformError,
 } from "./shell";
 export type {
+  DetachedProcessGroupTracker,
   ShellConfig,
   ShellProcessCompletion,
   SpawnedShellProcess,
@@ -49,6 +51,7 @@ export type {
   ProcessMode,
   ProcessOutputSource,
   ProcessShutdownResult,
+  ProcessShutdownSignalFailure,
   ProcessSignalResult,
   PublicProcessMode,
   StartProcessOptions,

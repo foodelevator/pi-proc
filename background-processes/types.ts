@@ -146,7 +146,15 @@ export interface ProcessSignalResult {
   completion?: ProcessCompletion;
 }
 
+export interface ProcessShutdownSignalFailure {
+  pid: number;
+  id?: string;
+  signal: NodeJS.Signals;
+  error: Error;
+}
+
 export interface ProcessShutdownResult {
   signaled: number[];
   forceKilled: number[];
+  signalFailures: ProcessShutdownSignalFailure[];
 }
