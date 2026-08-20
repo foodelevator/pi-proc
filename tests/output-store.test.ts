@@ -54,7 +54,7 @@ describe("OutputStore accumulation", () => {
       omittedRanges: [],
       totalBytes: 0,
       totalLines: 0,
-      cursor: { before: 0, after: 0, advanced: true },
+      cursor: { before: 0, after: 0, advanced: false },
     });
   });
 
@@ -196,6 +196,23 @@ describe("OutputStore spill behavior", () => {
     expect(store.readRange(13, 3).content).toBe("b\nc");
   });
 
+  it("keeps its line-bounded tail correct across repeated post-spill appends", () => {
+    const { store } = makeStore({
+      maxInMemoryBytes: 100,
+      maxInMemoryLines: 2,
+    });
+
+    store.append("zero\none\ntwo");
+    for (const value of ["\nthree", "\nfour", "\nfive"]) store.append(value);
+
+    expect(store.totalLines).toBe(6);
+    expect(store.stats).toMatchObject({
+      memoryBytes: Buffer.byteLength("four\nfive"),
+      memoryRange: { start: 19, end: 28 },
+    });
+    expect(store.readRange(0, 100).content).toBe("zero\none\ntwo\nthree\nfour\nfive");
+  });
+
   it("keeps spill files after close and can still range-read them", () => {
     const { store, path } = makeStore({
       maxInMemoryBytes: 3,
@@ -223,13 +240,42 @@ describe("OutputStore implicit reads", () => {
 
     expect(first).toMatchObject({
       content: "first",
-      snapshotEnd: 5,
+      totalBytes: 5,
       cursor: { before: 0, after: 5, advanced: true },
     });
     expect(second).toMatchObject({
       content: "-second",
       requestedRange: { start: 5, end: 12 },
       cursor: { before: 5, after: 12, advanced: true },
+    });
+  });
+
+  it("reads through a spill file, advances its cursor, and surfaces the spill path", () => {
+    const { store, path } = makeStore({
+      maxInMemoryBytes: 4,
+      maxInMemoryLines: 100,
+    });
+    store.append("ab");
+    store.append("cde");
+    store.append("f");
+
+    const first = store.readImplicit();
+
+    expect(first).toMatchObject({
+      content: "abcdef",
+      requestedRange: { start: 0, end: 6 },
+      returnedRange: { start: 0, end: 6 },
+      cursor: { before: 0, after: 6, advanced: true },
+      totalBytes: 6,
+      spillPath: path,
+    });
+
+    store.append("gh");
+    expect(store.readImplicit()).toMatchObject({
+      content: "gh",
+      returnedRange: { start: 6, end: 8 },
+      cursor: { before: 6, after: 8, advanced: true },
+      spillPath: path,
     });
   });
 
@@ -247,7 +293,10 @@ describe("OutputStore implicit reads", () => {
       truncation: { truncated: true, by: ["bytes"], omittedBytes: 5 },
       cursor: { before: 0, after: 10, advanced: true },
     });
-    expect(store.readImplicit().content).toBe("");
+    expect(store.readImplicit()).toMatchObject({
+      content: "",
+      cursor: { before: 10, after: 10, advanced: false },
+    });
   });
 
   it("returns the last complete lines and reports line truncation", () => {

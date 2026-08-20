@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
+  ftruncateSync,
   openSync,
   readSync,
   writeSync,
@@ -38,14 +39,21 @@ function requireNonNegativeInteger(value: number, name: string): number {
   return value;
 }
 
+function countNewlines(
+  buffer: Buffer,
+  start = 0,
+  end = buffer.length,
+): number {
+  let newlines = 0;
+  for (let index = start; index < end; index++) {
+    if (buffer[index] === NEWLINE) newlines++;
+  }
+  return newlines;
+}
+
 function countLines(buffer: Buffer): number {
   if (buffer.length === 0) return 0;
-
-  let lines = buffer[buffer.length - 1] === NEWLINE ? 0 : 1;
-  for (const byte of buffer) {
-    if (byte === NEWLINE) lines++;
-  }
-  return lines;
+  return countNewlines(buffer) + (buffer[buffer.length - 1] === NEWLINE ? 0 : 1);
 }
 
 function suffixStartForLineLimit(buffer: Buffer, maxLines: number): number {
@@ -79,10 +87,18 @@ function nonEmptyRange(start: number, end: number): ByteRange[] {
   return start < end ? [{ start, end }] : [];
 }
 
-function writeAll(fd: number, buffer: Buffer): void {
+function writeAll(fd: number, buffer: Buffer, position: number): void {
   let offset = 0;
   while (offset < buffer.length) {
-    offset += writeSync(fd, buffer, offset, buffer.length - offset);
+    const written = writeSync(
+      fd,
+      buffer,
+      offset,
+      buffer.length - offset,
+      position + offset,
+    );
+    if (written <= 0) throw new Error("Spill file write made no progress");
+    offset += written;
   }
 }
 
@@ -105,6 +121,7 @@ export class OutputStore {
   #memoryChunks: Buffer[] = [];
   #tail: Buffer = Buffer.alloc(0);
   #tailStart = 0;
+  #tailNewlines = 0;
   #totalBytes = 0;
   #newlineCount = 0;
   #lastByte: number | undefined;
@@ -189,10 +206,18 @@ export class OutputStore {
       return;
     }
 
-    writeAll(this.#spillFd, chunk);
-    this.#accountFor(chunk);
-    this.#tail = this.#boundedTail(Buffer.concat([this.#tail, chunk]));
-    this.#tailStart = this.#totalBytes - this.#tail.length;
+    const writePosition = this.#totalBytes;
+    try {
+      writeAll(this.#spillFd, chunk, writePosition);
+    } catch (error) {
+      // A short write followed by an error must not shift subsequent logical offsets.
+      ftruncateSync(this.#spillFd, writePosition);
+      throw error;
+    }
+
+    const chunkNewlines = this.#accountFor(chunk);
+    this.#tailNewlines += chunkNewlines;
+    this.#setBoundedTail(Buffer.concat([this.#tail, chunk]), this.#tailNewlines);
   }
 
   read(options: OutputReadOptions = {}): OutputReadResult {
@@ -266,13 +291,12 @@ export class OutputStore {
       cursor: {
         before: cursorBefore,
         after: this.#deliveredCursor,
-        advanced: !explicit,
+        advanced: this.#deliveredCursor !== cursorBefore,
       },
       totalBytes: snapshotEnd,
       totalLines: snapshotLines,
       returnedBytes: bytes.length,
       returnedLines: countLines(bytes),
-      snapshotEnd,
       ...(this.#spillPath === undefined ? {} : { spillPath: this.#spillPath }),
     };
   }
@@ -295,12 +319,12 @@ export class OutputStore {
     }
   }
 
-  #accountFor(chunk: Buffer): void {
+  #accountFor(chunk: Buffer): number {
+    const chunkNewlines = countNewlines(chunk);
     this.#totalBytes += chunk.length;
-    for (const byte of chunk) {
-      if (byte === NEWLINE) this.#newlineCount++;
-    }
+    this.#newlineCount += chunkNewlines;
     this.#lastByte = chunk[chunk.length - 1];
+    return chunkNewlines;
   }
 
   #spill(): void {
@@ -308,7 +332,11 @@ export class OutputStore {
     const fd = openSync(path, "wx+", 0o600);
 
     try {
-      for (const chunk of this.#memoryChunks) writeAll(fd, chunk);
+      let position = 0;
+      for (const chunk of this.#memoryChunks) {
+        writeAll(fd, chunk, position);
+        position += chunk.length;
+      }
     } catch (error) {
       closeSync(fd);
       throw error;
@@ -318,14 +346,31 @@ export class OutputStore {
     this.#spillPath = path;
     this.#spillFd = fd;
     this.#memoryChunks = [];
-    this.#tail = this.#boundedTail(completeOutput);
-    this.#tailStart = this.#totalBytes - this.#tail.length;
+    this.#setBoundedTail(completeOutput, this.#newlineCount);
   }
 
-  #boundedTail(buffer: Buffer): Buffer {
+  #setBoundedTail(buffer: Buffer, newlines: number): void {
     const byteStart = Math.max(0, buffer.length - this.#maxInMemoryBytes);
-    const lineStart = suffixStartForLineLimit(buffer, this.#maxInMemoryLines);
-    return Buffer.from(buffer.subarray(Math.max(byteStart, lineStart)));
+    const lineCount = buffer.length === 0
+      ? 0
+      : newlines + (buffer[buffer.length - 1] === NEWLINE ? 0 : 1);
+    let linesToDrop = Math.max(0, lineCount - this.#maxInMemoryLines);
+    let lineStart = 0;
+
+    while (linesToDrop > 0) {
+      const newline = buffer.indexOf(NEWLINE, lineStart);
+      if (newline === -1) {
+        lineStart = buffer.length;
+        break;
+      }
+      lineStart = newline + 1;
+      linesToDrop--;
+    }
+
+    const start = Math.max(byteStart, lineStart);
+    this.#tailNewlines = newlines - countNewlines(buffer, 0, start);
+    this.#tail = Buffer.from(buffer.subarray(start));
+    this.#tailStart = this.#totalBytes - this.#tail.length;
   }
 
   #allocateSpillPath(): string {

@@ -16,6 +16,7 @@ export interface OutputTruncation {
 export interface OutputCursorMetadata {
   before: number;
   after: number;
+  /** True only when this read moved the delivered cursor. */
   advanced: boolean;
 }
 
@@ -32,7 +33,6 @@ export interface OutputReadResult {
   totalLines: number;
   returnedBytes: number;
   returnedLines: number;
-  snapshotEnd: number;
   spillPath?: string;
 }
 
