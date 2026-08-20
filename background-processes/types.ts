@@ -1,3 +1,7 @@
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+
+import type { OutputStore } from "./output-store";
+
 export interface ByteRange {
   /** Inclusive byte offset. */
   start: number;
@@ -67,4 +71,82 @@ export interface OutputStoreOptions {
   tempFilePrefix?: string;
   /** Primarily for deterministic tests. The returned path must not already exist. */
   createSpillPath?: () => string;
+}
+
+export type ProcessMode = "wait" | "background" | "monitor";
+export type PublicProcessMode = Exclude<ProcessMode, "wait">;
+export type ProcessOutputSource = "stdout" | "stderr";
+
+export interface PiSessionEnvironment {
+  sessionId?: string;
+  sessionFile?: string;
+  provider?: string;
+  model?: string;
+  reasoningLevel?: string;
+}
+
+export interface ProcessCompletion {
+  completedAt: number;
+  exitCode: number | null;
+  exitSignal: NodeJS.Signals | null;
+  timedOut: boolean;
+  error?: Error;
+}
+
+export interface ProcessExecution {
+  /** Set only after a foreground execution is promoted. */
+  id?: string;
+  command: string;
+  cwd: string;
+  mode: ProcessMode;
+  child: ChildProcessWithoutNullStreams;
+  pid: number;
+  startedAt: number;
+  completedAt?: number;
+  exitCode?: number | null;
+  exitSignal?: NodeJS.Signals | null;
+  timedOut: boolean;
+  stdinClosed: boolean;
+  lastSignal?: NodeJS.Signals;
+  outputStore: OutputStore;
+  readonly deliveredCursor: number;
+  completion: Promise<ProcessCompletion>;
+}
+
+/** A wait-mode execution, private to its caller unless it is promoted. */
+export interface ForegroundExecution extends ProcessExecution {
+  /** Resolves if steering promotes this execution; otherwise remains pending. */
+  detachment: Promise<ManagedProcessRecord>;
+}
+
+export interface ManagedProcessRecord extends ProcessExecution {
+  id: string;
+  mode: PublicProcessMode;
+}
+
+export interface HistoricalProcessRecord {
+  id: string;
+  command?: string;
+  message?: string;
+}
+
+export interface StartProcessOptions {
+  mode?: ProcessMode;
+  cwd?: string;
+  /** Milliseconds; the process group is sent SIGKILL when this expires. */
+  timeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
+  sessionEnvironment?: PiSessionEnvironment;
+}
+
+export interface ProcessSignalResult {
+  signal: NodeJS.Signals;
+  sent: boolean;
+  exited: boolean;
+  completion?: ProcessCompletion;
+}
+
+export interface ProcessShutdownResult {
+  signaled: number[];
+  forceKilled: number[];
 }
