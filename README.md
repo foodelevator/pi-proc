@@ -20,7 +20,7 @@ pi install .
 pi list
 ```
 
-Use `pi install -l .` instead for project-local Pi settings. Run `pi remove .` (or `pi remove -l .`) to remove that local-path registration. The extension entry point is declared in `package.json`. If `pi-proc` is published to npm, its equivalent commands are `pi -e npm:pi-proc`, `pi install npm:pi-proc`, and `pi remove npm:pi-proc`.
+Use `pi install -l .` instead for project-local Pi settings. Run `pi remove .` (or `pi remove -l .`) to remove that local-path registration. The extension entry point is declared in `package.json`. You can also install `pi-proc` directly from GitHub using `pi -e git:github.com/foodelevator/pi-proc`, `pi install git:github.com/foodelevator/pi-proc`, and `pi remove git:github.com/foodelevator/pi-proc`.
 
 ## Usage
 
