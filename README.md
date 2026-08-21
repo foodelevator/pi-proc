@@ -53,10 +53,10 @@ Detached modes are available in TUI and RPC sessions. Print and JSON sessions in
 ### Manage a detached process
 
 ```jsonc
-// Consume unread combined stdout/stderr and advance its cursor
+// Consume unread combined stdout/stderr and advance the shared cursor
 {"id":"p1"}                         // process_read
 
-// Recover an explicit byte range without moving the cursor
+// Replay an explicit byte range without consuming or moving that cursor
 {"id":"p1","start":0,"length":4096} // process_read
 
 // Write exact stdin data; no newline is added
@@ -77,6 +77,8 @@ Detached modes are available in TUI and RPC sessions. Print and JSON sessions in
 // Include completed records and prior-runtime tombstones
 {"include_completed":true}            // process_list
 ```
+
+`process_read` uses one delivered cursor per process—not separate tool and notification cursors. A cursorless read (no `start`) consumes unread combined output and advances the same cursor used by monitor and completion notifications. Supplying `start` explicitly switches to a non-consuming replay/range read: it does not mark fetched bytes as delivered. Bytes at or beyond the shared cursor therefore remain unread and may appear again in a later automatic notification or cursorless `process_read`, even if an explicit read already returned them.
 
 Shell-level detachment (`&`, `nohup`, and daemonization) is unsupported because inherited pipes and lifecycle ownership become ambiguous. Use `mode: "background"` or `mode: "monitor"` instead.
 

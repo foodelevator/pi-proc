@@ -235,11 +235,43 @@ describe("real Pi runtime loading", () => {
           },
         },
       });
+      const processReadDefinition = session.getToolDefinition("process_read");
+      if (processReadDefinition === undefined) {
+        throw new Error("Registered process_read definition was unavailable");
+      }
+      const registeredStartSchema = (processReadDefinition.parameters as {
+        properties: { start: { description?: string } };
+      }).properties.start;
+      expect(registeredStartSchema.description).toContain(
+        "single delivered cursor shared with monitor/completion notifications",
+      );
+      expect(registeredStartSchema.description).toContain(
+        "remain unread and may appear again",
+      );
+      expect(processReadDefinition.description).toContain(
+        "one delivered cursor shared by cursorless process_read calls and monitor/completion notifications",
+      );
+      expect(processReadDefinition.description).toContain(
+        "explicit non-consuming replay/range read",
+      );
+      expect(processReadDefinition.promptSnippet).toContain(
+        "cursorless reads consume the notification-shared cursor",
+      );
+      expect(processReadDefinition.promptGuidelines).toEqual([
+        "process_read has one delivered cursor shared with monitor and completion notifications. Omit start to consume unread combined output and advance that shared cursor.",
+        "Supplying start to process_read is an explicit non-consuming replay/range read: it does not mark fetched bytes as delivered, so bytes not already past the shared cursor remain unread and may appear again in later automatic notifications or cursorless process_read calls.",
+      ]);
       expect(session.systemPrompt).toContain(
         "Execute bash commands, optionally as managed background or monitor processes",
       );
       expect(session.systemPrompt).toContain(
-        "Read combined stdout/stderr from an active or completed managed process",
+        "- process_read: Read combined process output; cursorless reads consume the notification-shared cursor, while start replays without consuming",
+      );
+      expect(session.systemPrompt).toContain(
+        "- process_read has one delivered cursor shared with monitor and completion notifications. Omit start to consume unread combined output and advance that shared cursor.",
+      );
+      expect(session.systemPrompt).toContain(
+        "- Supplying start to process_read is an explicit non-consuming replay/range read: it does not mark fetched bytes as delivered, so bytes not already past the shared cursor remain unread and may appear again in later automatic notifications or cursorless process_read calls.",
       );
       expect(session.systemPrompt).toContain(
         "process_write does not add a newline",

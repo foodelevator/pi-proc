@@ -24,7 +24,7 @@ export const processReadSchema = Type.Object({
       minimum: 0,
       maximum: MAX_SAFE_INTEGER,
       description:
-        "Explicit zero-based combined-output byte offset. Omit to consume unread output from the process cursor.",
+        "Explicit zero-based combined-output byte offset. Omit start to consume unread output and advance the single delivered cursor shared with monitor/completion notifications. Supplying start is a non-consuming replay/range read: it does not mark fetched bytes as delivered, so bytes not already past the shared cursor remain unread and may appear again in later automatic notifications or cursorless reads.",
     }),
   ),
   length: Type.Optional(
@@ -51,11 +51,12 @@ export function createProcessReadTool(
     name: "process_read",
     label: "Process Read",
     description:
-      "Read the combined stdout/stderr transcript of a managed process. Without start, returns the unread tail through a fixed snapshot, capped at 50KB/2000 lines, reports any omitted prefix, and advances the implicit cursor to the snapshot end. With start, reads forward without moving the cursor and aligns the returned range inward to UTF-8 boundaries. Requested, returned, and omitted ranges always report raw zero-based byte offsets, including bytes skipped for UTF-8 alignment. Length must be positive. Works for active and completed processes retained in the current runtime.",
+      "Read the combined stdout/stderr transcript of a managed process. Each process has one delivered cursor shared by cursorless process_read calls and monitor/completion notifications. Without start, consumes unread combined output through a fixed snapshot, returns its tail capped at 50KB/2000 lines, reports any omitted prefix, and advances that shared cursor to the snapshot end. Supplying start performs an explicit non-consuming replay/range read: it neither moves the shared cursor nor marks fetched bytes as delivered, so bytes not already past the cursor remain unread and may appear again in later automatic notifications or cursorless process_read calls. Explicit ranges align inward to UTF-8 boundaries. Requested, returned, and omitted ranges use raw zero-based byte offsets, including bytes skipped for UTF-8 alignment. Length must be positive. Works for active and completed processes retained in the current runtime.",
     promptSnippet:
-      "Read combined stdout/stderr from an active or completed managed process",
+      "Read combined process output; cursorless reads consume the notification-shared cursor, while start replays without consuming",
     promptGuidelines: [
-      "Use process_read without start to consume new managed-process output; use an explicit start byte to recover omitted or previously delivered output without moving the implicit cursor.",
+      "process_read has one delivered cursor shared with monitor and completion notifications. Omit start to consume unread combined output and advance that shared cursor.",
+      "Supplying start to process_read is an explicit non-consuming replay/range read: it does not mark fetched bytes as delivered, so bytes not already past the shared cursor remain unread and may appear again in later automatic notifications or cursorless process_read calls.",
     ],
     parameters: processReadSchema,
     renderCall: renderProcessReadCall,

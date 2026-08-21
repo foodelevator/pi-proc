@@ -130,6 +130,9 @@ describe("auxiliary tool schemas and prompts", () => {
       type: string;
       enum: string[];
     };
+    const startSchema = auxiliary.read.parameters.properties.start as unknown as {
+      description?: string;
+    };
 
     expect(signalSchema.type).toBe("string");
     expect(signalSchema.enum).toEqual(Object.keys(osConstants.signals).sort());
@@ -137,9 +140,29 @@ describe("auxiliary tool schemas and prompts", () => {
       type: "integer",
       minimum: 1,
     });
-    expect(auxiliary.read.promptGuidelines?.join(" ")).toContain(
-      "explicit start byte",
+    expect(startSchema.description).toContain(
+      "single delivered cursor shared with monitor/completion notifications",
     );
+    expect(startSchema.description).toContain(
+      "remain unread and may appear again",
+    );
+    expect(auxiliary.read.description).toContain(
+      "one delivered cursor shared by cursorless process_read calls and monitor/completion notifications",
+    );
+    expect(auxiliary.read.promptSnippet).toContain(
+      "cursorless reads consume the notification-shared cursor",
+    );
+    expect(auxiliary.read.promptGuidelines).toEqual(expect.arrayContaining([
+      expect.stringContaining(
+        "Omit start to consume unread combined output and advance that shared cursor",
+      ),
+      expect.stringContaining(
+        "explicit non-consuming replay/range read",
+      ),
+      expect.stringContaining(
+        "may appear again in later automatic notifications or cursorless process_read calls",
+      ),
+    ]));
     expect(auxiliary.write.description).toContain("never appends a newline");
     expect(auxiliary.kill.description).toContain("never escalates automatically");
     expect(auxiliary.list.description).toContain("active processes only");
