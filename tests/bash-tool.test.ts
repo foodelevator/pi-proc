@@ -97,7 +97,10 @@ describe("bash override schema", () => {
       "use process_read, process_write, process_kill, and process_list",
     );
     expect(description).toContain(
-      "automatic output/completion notifications are not implemented yet",
+      "Background processes automatically notify on completion",
+    );
+    expect(description).toContain(
+      "monitor processes also notify on stdout activity",
     );
   });
 });

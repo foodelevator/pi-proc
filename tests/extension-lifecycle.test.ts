@@ -36,6 +36,8 @@ describe("session-scoped ProcessManager lifecycle", () => {
         registeredTools.push(tool.name);
         if (tool.name === "bash") bash = tool;
       },
+      registerMessageRenderer() {},
+      sendMessage() {},
       on(event: string, handler: SessionHandler) {
         const registered = handlers.get(event) ?? [];
         registered.push(handler);
@@ -53,6 +55,7 @@ describe("session-scoped ProcessManager lifecycle", () => {
 
     const ctx = {
       cwd: process.cwd(),
+      isIdle: () => true,
       sessionManager: {
         getSessionId: () => "lifecycle-test",
         getSessionFile: () => undefined,

@@ -64,6 +64,8 @@ describe("steering input event", () => {
     let shutdown: ShutdownHandler | undefined;
     const pi = {
       registerTool() {},
+      registerMessageRenderer() {},
+      sendMessage() {},
       on(event: string, handler: unknown) {
         if (event === "input") input = handler as InputHandler;
         if (event === "session_start") start = handler as StartHandler;
@@ -82,6 +84,7 @@ describe("steering input event", () => {
     const ctx = {
       cwd: process.cwd(),
       mode: "tui",
+      isIdle: () => true,
       sessionManager: {
         getSessionId: () => "steering-event-test",
         getSessionFile: () => undefined,

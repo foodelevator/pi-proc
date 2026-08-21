@@ -3,6 +3,10 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 
+import {
+  ProcessNotificationScheduler,
+  registerProcessNotificationRenderer,
+} from "./notification-scheduler";
 import { ProcessManager } from "./process-manager";
 import { registerBashTool } from "./tools/bash";
 import { registerProcessKillTool } from "./tools/process-kill";
@@ -11,6 +15,20 @@ import { registerProcessReadTool } from "./tools/process-read";
 import { registerProcessWriteTool } from "./tools/process-write";
 
 export { OutputStore } from "./output-store";
+export {
+  PROCESS_NOTIFICATION_MESSAGE_TYPE,
+  PROCESS_NOTIFICATION_WINDOW_MS,
+  ProcessNotificationScheduler,
+  registerProcessNotificationRenderer,
+} from "./notification-scheduler";
+export type {
+  JsonProcessCompletion,
+  ProcessNotificationBatchDetails,
+  ProcessNotificationEventType,
+  ProcessNotificationItem,
+  ProcessNotificationMessage,
+  ProcessNotificationSchedulerOptions,
+} from "./notification-scheduler";
 export {
   isNormallyTerminatingSignal,
   normalizeSignal,
@@ -158,6 +176,9 @@ export function createBackgroundProcessesExtension(
 
   return (pi) => {
     let manager: ProcessManager | undefined;
+    let notifications: ProcessNotificationScheduler | undefined;
+
+    registerProcessNotificationRenderer(pi);
 
     const toolOptions = { getManager: () => manager };
     registerBashTool(pi, toolOptions);
@@ -176,19 +197,36 @@ export function createBackgroundProcessesExtension(
       return { action: "continue" };
     });
 
+    pi.on("turn_end", () => {
+      notifications?.handleTurnEnd();
+    });
+
     pi.on("session_start", async (_event, ctx) => {
       const next = createManager({
         cwd: ctx.cwd,
         sessionEnvironment: () => sessionEnvironment(ctx),
       });
+      const nextNotifications = new ProcessNotificationScheduler({
+        eventSource: next,
+        isIdle: () => ctx.isIdle(),
+        sendMessage: (message, delivery) => {
+          pi.sendMessage(message, delivery);
+        },
+      });
       const previous = manager;
+      const previousNotifications = notifications;
       manager = next;
+      notifications = nextNotifications;
+      previousNotifications?.shutdown();
       if (previous !== undefined) await previous.shutdown();
     });
 
     pi.on("session_shutdown", async () => {
       const current = manager;
+      const currentNotifications = notifications;
       manager = undefined;
+      notifications = undefined;
+      currentNotifications?.shutdown();
       if (current !== undefined) await current.shutdown();
     });
   };

@@ -13,7 +13,7 @@ import {
   type AgentToolResult,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   ProcessKillToolDetails,
@@ -80,6 +80,13 @@ describe("real Pi runtime loading", () => {
         ],
       });
       session = created.session;
+      const notificationCalls: Array<{ message: unknown; options: unknown }> = [];
+      vi.spyOn(session, "sendCustomMessage").mockImplementation(
+        (message, sendOptions) => {
+          notificationCalls.push({ message, options: sendOptions });
+          return Promise.resolve();
+        },
+      );
       await session.bindExtensions({ mode: "rpc" });
 
       const bash = session.state.tools.find((tool) => tool.name === "bash");
@@ -164,8 +171,32 @@ describe("real Pi runtime loading", () => {
           process.id === "p1" && process.state === "completed"
         );
       });
+      await waitUntil(() => notificationCalls.some(({ message }) =>
+        (message as { details?: { processes?: Array<{ id?: string }> } })
+          .details?.processes?.some((process) => process.id === "p1") === true
+      ));
+      const firstNotification = notificationCalls.find(({ message }) =>
+        (message as { details?: { processes?: Array<{ id?: string }> } })
+          .details?.processes?.some((process) => process.id === "p1") === true
+      );
+      expect(firstNotification).toMatchObject({
+        message: {
+          customType: "pibg-process-events",
+          display: true,
+          details: {
+            processes: [{
+              id: "p1",
+              events: ["completed"],
+              status: { state: "completed" },
+              output: { content: "detached-smoke" },
+            }],
+          },
+        },
+        options: { triggerTurn: true, deliverAs: "steer" },
+      });
       const detachedOutput = await processRead.execute("real-read", {
         id: "p1",
+        start: 0,
       });
       expect(detachedOutput.details).toMatchObject({
         process: { id: "p1", state: "completed" },
@@ -192,8 +223,10 @@ describe("real Pi runtime loading", () => {
           process.id === "p2" && process.state === "completed"
         );
       });
-      expect((await processRead.execute("real-read-stdin", { id: "p2" }))
-        .details.output.content).toBe("<no-newline>");
+      expect((await processRead.execute("real-read-stdin", {
+        id: "p2",
+        start: 0,
+      })).details.output.content).toBe("<no-newline>");
 
       await bash.execute("real-kill-background", {
         command: "printf kill-ready; sleep 30",
@@ -215,6 +248,35 @@ describe("real Pi runtime loading", () => {
         exited: true,
         process: { id: "p3", state: "completed", exitSignal: "SIGKILL" },
         output: { content: "kill-ready" },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(notificationCalls.some(({ message }) =>
+        (message as { details?: { processes?: Array<{ id?: string }> } })
+          .details?.processes?.some((process) => process.id === "p3") === true
+      )).toBe(false);
+
+      await bash.execute("real-monitor-notification", {
+        command: "printf stderr-first >&2; sleep 0.02; printf stdout-second",
+        mode: "monitor",
+      });
+      await waitUntil(() => notificationCalls.some(({ message }) =>
+        (message as { details?: { processes?: Array<{ id?: string }> } })
+          .details?.processes?.some((process) => process.id === "p4") === true
+      ));
+      const monitorNotification = notificationCalls.find(({ message }) =>
+        (message as { details?: { processes?: Array<{ id?: string }> } })
+          .details?.processes?.some((process) => process.id === "p4") === true
+      );
+      expect(monitorNotification).toMatchObject({
+        message: {
+          details: {
+            processes: [{
+              id: "p4",
+              events: ["stdout", "completed"],
+              output: { content: "stderr-firststdout-second" },
+            }],
+          },
+        },
       });
     } finally {
       try {

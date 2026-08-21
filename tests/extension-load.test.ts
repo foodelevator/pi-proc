@@ -36,6 +36,7 @@ describe("extension loading", () => {
       expect(result.errors).toEqual([]);
       expect(result.extensions).toHaveLength(1);
       extension = result.extensions[0];
+      expect(extension?.messageRenderers.has("pibg-process-events")).toBe(true);
       const bash = extension?.tools.get("bash")?.definition;
       expect([...(extension?.tools.keys() ?? [])]).toEqual([
         "bash",

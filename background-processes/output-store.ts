@@ -227,7 +227,32 @@ export class OutputStore {
   }
 
   read(options: OutputReadOptions = {}): OutputReadResult {
-    return this.#read(options);
+    return this.#read(options, true, this.#maxReadLines, false);
+  }
+
+  /**
+   * Snapshot the unread tail without advancing the delivery cursor. This is used
+   * to prepare an atomic notification: the cursor is committed only after the
+   * message has been accepted by Pi.
+   */
+  peekImplicit(maxBytes = this.#maxReadBytes, maxLines = this.#maxReadLines): OutputReadResult {
+    return this.#read(
+      { length: requireNonNegativeInteger(maxBytes, "maxBytes") },
+      false,
+      requireNonNegativeInteger(maxLines, "maxLines"),
+      true,
+    );
+  }
+
+  /** Advance the delivery cursor through a previously captured snapshot. */
+  advanceDeliveredCursor(snapshotEnd: number): void {
+    const end = requireNonNegativeInteger(snapshotEnd, "snapshotEnd");
+    if (end > this.#totalBytes) {
+      throw new RangeError(
+        `snapshotEnd ${end} exceeds total output size ${this.#totalBytes}`,
+      );
+    }
+    if (end > this.#deliveredCursor) this.#deliveredCursor = end;
   }
 
   /**
@@ -259,7 +284,12 @@ export class OutputStore {
     return bytes.toString("utf8");
   }
 
-  #read(options: OutputReadOptions): OutputReadResult {
+  #read(
+    options: OutputReadOptions,
+    consumeImplicit: boolean,
+    maxReadLines: number,
+    allowZeroImplicit: boolean,
+  ): OutputReadResult {
     const snapshotEnd = this.#totalBytes;
     const snapshotLines = this.totalLines;
     const cursorBefore = this.#deliveredCursor;
@@ -270,7 +300,7 @@ export class OutputStore {
     const requestedLength = options.length === undefined
       ? this.#maxReadBytes
       : requireNonNegativeInteger(options.length, "length");
-    if (!explicit && requestedLength === 0) {
+    if (!explicit && requestedLength === 0 && !allowZeroImplicit) {
       throw new RangeError("length must be positive for an implicit read");
     }
 
@@ -311,7 +341,7 @@ export class OutputStore {
       if (utf8Adjusted) reasons.push("utf8");
       bytes = this.#readBytes(returnedStart, returnedEnd);
 
-      const lineLimitedLength = prefixEndForLineLimit(bytes, this.#maxReadLines);
+      const lineLimitedLength = prefixEndForLineLimit(bytes, maxReadLines);
       if (lineLimitedLength < bytes.length) reasons.push("lines");
       returnedEnd = returnedStart + lineLimitedLength;
       bytes = bytes.subarray(0, lineLimitedLength);
@@ -349,7 +379,7 @@ export class OutputStore {
         }
       }
 
-      const lineLimitedStart = suffixStartForLineLimit(bytes, this.#maxReadLines);
+      const lineLimitedStart = suffixStartForLineLimit(bytes, maxReadLines);
       if (lineLimitedStart > 0) reasons.push("lines");
       returnedStart += lineLimitedStart;
       bytes = bytes.subarray(lineLimitedStart);
@@ -367,7 +397,7 @@ export class OutputStore {
       0,
     );
 
-    if (!explicit) this.#deliveredCursor = snapshotEnd;
+    if (!explicit && consumeImplicit) this.#deliveredCursor = snapshotEnd;
 
     return {
       content: bytes.toString("utf8"),
