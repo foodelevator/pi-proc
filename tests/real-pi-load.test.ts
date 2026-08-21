@@ -78,7 +78,7 @@ describe("real Pi runtime loading", () => {
       const releasePath = join(cwd, "release-background");
       const markerPath = join(cwd, "background-finished");
       const detachedCommand =
-        `while [ ! -f ${JSON.stringify(releasePath)} ]; do sleep 0.01; done; printf detached-smoke > ${JSON.stringify(markerPath)}`;
+        `for _ in {1..100}; do if [ -f ${JSON.stringify(releasePath)} ]; then printf detached-smoke > ${JSON.stringify(markerPath)}; exit 0; fi; sleep 0.01; done; exit 124`;
       const background = await bash.execute("real-load-rpc-background", {
         command: detachedCommand,
         mode: "background",
@@ -101,16 +101,18 @@ describe("real Pi runtime loading", () => {
       expect(existsSync(markerPath)).toBe(false);
 
       writeFileSync(releasePath, "release", "utf8");
-      await waitUntil(() => existsSync(markerPath));
-
-      await session.extensionRunner.emit({
-        type: "session_shutdown",
-        reason: "quit",
-      });
+      await waitUntil(() => existsSync(markerPath), 1_000);
     } finally {
-      session?.dispose();
-      rmSync(cwd, { recursive: true, force: true });
-      rmSync(agentDir, { recursive: true, force: true });
+      try {
+        await session?.extensionRunner.emit({
+          type: "session_shutdown",
+          reason: "quit",
+        });
+      } finally {
+        session?.dispose();
+        rmSync(cwd, { recursive: true, force: true });
+        rmSync(agentDir, { recursive: true, force: true });
+      }
     }
   });
 
@@ -157,15 +159,17 @@ describe("real Pi runtime loading", () => {
       })).rejects.toThrow(
         "available only in TUI and RPC modes; current mode is `print`",
       );
-
-      await session.extensionRunner.emit({
-        type: "session_shutdown",
-        reason: "quit",
-      });
     } finally {
-      session?.dispose();
-      rmSync(cwd, { recursive: true, force: true });
-      rmSync(agentDir, { recursive: true, force: true });
+      try {
+        await session?.extensionRunner.emit({
+          type: "session_shutdown",
+          reason: "quit",
+        });
+      } finally {
+        session?.dispose();
+        rmSync(cwd, { recursive: true, force: true });
+        rmSync(agentDir, { recursive: true, force: true });
+      }
     }
   });
 });

@@ -12,16 +12,30 @@ describe("extension loading", () => {
   it("loads the package, creates a session manager, and executes the bash override", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "pibg-extension-cwd-"));
     const agentDir = mkdtempSync(join(tmpdir(), "pibg-extension-agent-"));
-    const result = await discoverAndLoadExtensions(
-      [process.cwd()],
+    const sessionFile = join(cwd, "session.jsonl");
+    const ctx = {
       cwd,
-      agentDir,
-    );
+      mode: "tui",
+      sessionManager: {
+        getSessionId: () => "session-load-test",
+        getSessionFile: () => sessionFile,
+      },
+      model: { provider: "test-provider", id: "test-model" },
+      thinkingLevel: "high",
+    } as unknown as ExtensionContext;
+    let extension: Awaited<
+      ReturnType<typeof discoverAndLoadExtensions>
+    >["extensions"][number] | undefined;
 
     try {
+      const result = await discoverAndLoadExtensions(
+        [process.cwd()],
+        cwd,
+        agentDir,
+      );
       expect(result.errors).toEqual([]);
       expect(result.extensions).toHaveLength(1);
-      const extension = result.extensions[0];
+      extension = result.extensions[0];
       const bash = extension?.tools.get("bash")?.definition;
       expect(bash).toBeDefined();
       expect(bash?.parameters).toMatchObject({
@@ -42,17 +56,6 @@ describe("extension loading", () => {
         ),
       ).rejects.toThrow("unavailable for this session");
 
-      const sessionFile = join(cwd, "session.jsonl");
-      const ctx = {
-        cwd,
-        mode: "tui",
-        sessionManager: {
-          getSessionId: () => "session-load-test",
-          getSessionFile: () => sessionFile,
-        },
-        model: { provider: "test-provider", id: "test-model" },
-        thinkingLevel: "high",
-      } as unknown as ExtensionContext;
       const start = extension?.handlers.get("session_start")?.[0];
       if (start === undefined) throw new Error("session_start was not registered");
       await start({ type: "session_start", reason: "startup" }, ctx);
@@ -91,10 +94,16 @@ describe("extension loading", () => {
       if (shutdown === undefined) {
         throw new Error("session_shutdown was not registered");
       }
-      await shutdown({ type: "session_shutdown", reason: "quit" }, ctx);
     } finally {
-      rmSync(cwd, { recursive: true, force: true });
-      rmSync(agentDir, { recursive: true, force: true });
+      try {
+        const shutdown = extension?.handlers.get("session_shutdown")?.[0];
+        if (shutdown !== undefined) {
+          await shutdown({ type: "session_shutdown", reason: "quit" }, ctx);
+        }
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+        rmSync(agentDir, { recursive: true, force: true });
+      }
     }
   });
 });
