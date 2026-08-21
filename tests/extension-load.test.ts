@@ -40,7 +40,7 @@ describe("extension loading", () => {
           undefined,
           {} as ExtensionContext,
         ),
-      ).rejects.toThrow("unavailable before session_start");
+      ).rejects.toThrow("unavailable for this session");
 
       const sessionFile = join(cwd, "session.jsonl");
       const ctx = {

@@ -235,6 +235,32 @@ export class OutputStore {
     return this.#read(length === undefined ? {} : { length }, true);
   }
 
+  /**
+   * Decode a larger raw tail for a secondary text truncator without consuming
+   * the cursor. If the window starts mid-line, discard that incomplete line
+   * when a later complete line is available.
+   */
+  snapshotTextTail(maxBytes: number): string {
+    const byteBudget = requirePositiveInteger(maxBytes, "maxBytes");
+    let start = Math.max(0, this.#totalBytes - byteBudget);
+    let bytes = this.#readBytes(start, this.#totalBytes);
+
+    while (bytes.length > 0 && (bytes[0] & 0xc0) === 0x80) {
+      start++;
+      bytes = bytes.subarray(1);
+    }
+    if (
+      start > 0
+      && this.#readBytes(start - 1, start)[0] !== NEWLINE
+    ) {
+      const firstNewline = bytes.indexOf(NEWLINE);
+      if (firstNewline !== -1 && firstNewline < bytes.length - 1) {
+        bytes = bytes.subarray(firstNewline + 1);
+      }
+    }
+    return bytes.toString("utf8");
+  }
+
   #read(
     options: OutputReadOptions,
     snapshotTail: boolean,

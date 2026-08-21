@@ -1,9 +1,10 @@
 import { existsSync, rmSync } from "node:fs";
 
-import type {
-  AgentToolResult,
-  BashToolDetails,
-  ExtensionContext,
+import {
+  createBashToolDefinition,
+  type AgentToolResult,
+  type BashToolDetails,
+  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -68,9 +69,19 @@ describe("bash override schema", () => {
       "mode",
       "timeout",
     ]);
-    expect(bashSchema.properties.mode).toMatchObject({
+    const modeSchema = bashSchema.properties.mode as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(modeSchema).toMatchObject({
+      type: "string",
       enum: ["wait", "background", "monitor"],
     });
+    const modeDescription = modeSchema.description;
+    expect(modeDescription).toBeTypeOf("string");
+    if (typeof modeDescription === "string") {
+      expect(modeDescription).toContain("not implemented yet");
+    }
   });
 
   it.each(["background", "monitor"] as const)(
@@ -174,11 +185,38 @@ describe("wait-compatible bash execution", () => {
       truncatedBy: "lines",
       totalLines: 2101,
       outputLines: 2000,
-      outputBytes: 10_000,
+      outputBytes: 9_999,
       lastLinePartial: false,
     });
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
     expect(text).toContain("[Showing lines 102-2101 of 2101.");
+  });
+
+  it("matches Pi for a byte-over-limit line ending in a newline", async () => {
+    const manager = makeManager();
+
+    const result = await execute(manager, {
+      command: "printf '%051200d\\n' 0",
+    });
+    const details = result.details;
+    if (details?.fullOutputPath === undefined) {
+      throw new Error("Expected newline-terminated spilled output");
+    }
+    spillPaths.push(details.fullOutputPath);
+
+    expect(details.truncation).toMatchObject({
+      truncated: true,
+      truncatedBy: "lines",
+      totalLines: 1,
+      totalBytes: 50 * 1024 + 1,
+      outputLines: 1,
+      outputBytes: 50 * 1024,
+      lastLinePartial: false,
+    });
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("[Showing lines 1-1 of 1.");
+    expect(text).not.toContain("line is 0B");
+    expect(text).not.toContain("\n\n\n[Showing");
   });
 
   it("throws with captured output for a nonzero exit", async () => {
@@ -245,5 +283,59 @@ describe("wait-compatible bash execution", () => {
     await expect(
       execute(manager, { command: "true", timeout: 3_000_000 }),
     ).rejects.toThrow("Invalid timeout: maximum");
+  });
+});
+
+function normalizeSpillResult(
+  result: AgentToolResult<BashToolDetails | undefined>,
+): AgentToolResult<BashToolDetails | undefined> {
+  const path = result.details?.fullOutputPath;
+  return {
+    content: result.content.map((content) =>
+      content.type === "text" && path !== undefined
+        ? { ...content, text: content.text.replaceAll(path, "<spill>") }
+        : content
+    ),
+    details: result.details === undefined
+      ? undefined
+      : {
+          ...result.details,
+          ...(path === undefined ? {} : { fullOutputPath: "<spill>" }),
+        },
+  };
+}
+
+describe("Pi bash differential regressions", () => {
+  it.each([
+    [
+      "line-limited trailing newline",
+      "for i in {1..2101}; do printf 'line\\n'; done",
+    ],
+    ["single byte-over-limit terminated line", "printf '%051200d\\n' 0"],
+    [
+      "byte-limited UTF-8 lines",
+      "for i in {1..3000}; do printf '😀-line-%s\\n' \"$i\"; done",
+    ],
+  ])("matches Pi exactly for %s", async (_name, command) => {
+    const manager = makeManager();
+    const ours = await execute(manager, { command });
+    const piTool = createBashToolDefinition(process.cwd(), {
+      exposeSessionEnvironment: false,
+    });
+    const pi = await piTool.execute(
+      "pi-tool-call",
+      { command },
+      undefined,
+      undefined,
+      context,
+    );
+
+    for (const path of [
+      ours.details?.fullOutputPath,
+      pi.details?.fullOutputPath,
+    ]) {
+      if (path !== undefined) spillPaths.push(path);
+    }
+    expect(normalizeSpillResult(ours)).toEqual(normalizeSpillResult(pi));
   });
 });

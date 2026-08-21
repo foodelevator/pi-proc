@@ -1,7 +1,9 @@
+import { StringEnum } from "@earendil-works/pi-ai";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
   formatSize,
+  truncateTail,
   type BashToolDetails,
   type ExtensionAPI,
   type ToolDefinition,
@@ -16,12 +18,14 @@ import type { ForegroundExecution } from "../types";
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
 export const BASH_UPDATE_THROTTLE_MS = 100;
+const BASH_SNAPSHOT_TAIL_BYTES = DEFAULT_MAX_BYTES * 4;
 
 export const bashSchema = Type.Object({
   command: Type.String({ description: "Bash command to execute" }),
   mode: Type.Optional(
-    Type.Enum(["wait", "background", "monitor"], {
-      description: "Execution mode (default: wait)",
+    StringEnum(["wait", "background", "monitor"] as const, {
+      description:
+        "Execution mode (default: wait). Background and monitor are not implemented yet; use wait.",
     }),
   ),
   timeout: Type.Optional(
@@ -58,34 +62,30 @@ function resolveTimeoutMs(timeout: number | undefined): number | undefined {
 }
 
 function snapshotOutput(output: OutputStore): BashOutputSnapshot {
-  const read = output.snapshotTail();
-  const truncatedBy = read.truncation.truncated
-    ? read.truncation.by.includes("lines")
-      ? "lines"
-      : "bytes"
-    : null;
-  const startsMidLine = read.returnedRange.start > 0
-    && output.readRange(read.returnedRange.start - 1, 1).content !== "\n";
-  const lastLinePartial = truncatedBy === "bytes"
-    && read.returnedLines === 1
-    && startsMidLine;
+  const tail = truncateTail(
+    output.snapshotTextTail(BASH_SNAPSHOT_TAIL_BYTES),
+    { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES },
+  );
+  const truncated = output.totalLines > DEFAULT_MAX_LINES
+    || output.totalBytes > DEFAULT_MAX_BYTES;
   const truncation: TruncationResult = {
-    content: read.content,
-    truncated: read.truncation.truncated,
-    truncatedBy,
-    totalLines: read.totalLines,
-    totalBytes: read.totalBytes,
-    outputLines: read.returnedLines,
-    outputBytes: read.returnedBytes,
-    lastLinePartial,
-    firstLineExceedsLimit: false,
+    ...tail,
+    truncated,
+    truncatedBy: truncated
+      ? tail.truncatedBy
+        ?? (output.totalBytes > DEFAULT_MAX_BYTES ? "bytes" : "lines")
+      : null,
+    totalLines: output.totalLines,
+    totalBytes: output.totalBytes,
     maxLines: DEFAULT_MAX_LINES,
     maxBytes: DEFAULT_MAX_BYTES,
   };
   return {
-    content: read.content,
+    content: truncation.content,
     truncation,
-    ...(read.spillPath === undefined ? {} : { fullOutputPath: read.spillPath }),
+    ...(output.spillPath === undefined
+      ? {}
+      : { fullOutputPath: output.spillPath }),
   };
 }
 
@@ -161,7 +161,7 @@ export function createWaitBashTool(
 
       const manager = options.getManager();
       if (manager === undefined) {
-        throw new Error("Bash process manager is unavailable before session_start");
+        throw new Error("Bash process manager is unavailable for this session");
       }
 
       let execution: ForegroundExecution | undefined;

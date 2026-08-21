@@ -268,6 +268,14 @@ describe("OutputStore implicit reads", () => {
     expect(store.deliveredCursor).toBe(0);
   });
 
+  it("decodes a wider snapshot tail without a leading partial line or cursor movement", () => {
+    const { store } = makeStore();
+    store.append("discard-me\nkeep");
+
+    expect(store.snapshotTextTail(8)).toBe("keep");
+    expect(store.deliveredCursor).toBe(0);
+  });
+
   it("reads through a spill file, advances its cursor, and surfaces the spill path", () => {
     const { store, path } = makeStore({
       maxInMemoryBytes: 4,
@@ -294,6 +302,19 @@ describe("OutputStore implicit reads", () => {
       returnedRange: { start: 6, end: 8 },
       cursor: { before: 6, after: 8, advanced: true },
       spillPath: path,
+    });
+  });
+
+  it("starts a byte-capped UTF-8 tail at a complete character", () => {
+    const { store } = makeStore({ maxReadBytes: 4, maxReadLines: 100 });
+    store.append("A😀B");
+
+    expect(store.readImplicit()).toMatchObject({
+      content: "B",
+      returnedRange: { start: 5, end: 6 },
+      omittedRanges: [{ start: 0, end: 5 }],
+      returnedBytes: 1,
+      cursor: { before: 0, after: 6, advanced: true },
     });
   });
 

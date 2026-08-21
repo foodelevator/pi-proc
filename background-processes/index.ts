@@ -90,25 +90,42 @@ function sessionEnvironment(ctx: ExtensionContext) {
   };
 }
 
-/** Register the wait-compatible override and one manager per Pi session runtime. */
-export default function backgroundProcesses(pi: ExtensionAPI): void {
-  let manager: ProcessManager | undefined;
-
-  registerWaitBashTool(pi, { getManager: () => manager });
-
-  pi.on("session_start", async (_event, ctx) => {
-    const previous = manager;
-    manager = undefined;
-    if (previous !== undefined) await previous.shutdown();
-    manager = new ProcessManager({
-      cwd: ctx.cwd,
-      sessionEnvironment: () => sessionEnvironment(ctx),
-    });
-  });
-
-  pi.on("session_shutdown", async () => {
-    const current = manager;
-    manager = undefined;
-    if (current !== undefined) await current.shutdown();
-  });
+export interface BackgroundProcessesExtensionOptions {
+  /** Test/embedding seam. Production creates the standard ProcessManager. */
+  createManager?: (
+    options: ConstructorParameters<typeof ProcessManager>[0],
+  ) => ProcessManager;
 }
+
+/** Build the wait override with one manager per Pi session runtime. */
+export function createBackgroundProcessesExtension(
+  options: BackgroundProcessesExtensionOptions = {},
+): (pi: ExtensionAPI) => void {
+  const createManager = options.createManager
+    ?? ((managerOptions) => new ProcessManager(managerOptions));
+
+  return (pi) => {
+    let manager: ProcessManager | undefined;
+
+    registerWaitBashTool(pi, { getManager: () => manager });
+
+    pi.on("session_start", async (_event, ctx) => {
+      const next = createManager({
+        cwd: ctx.cwd,
+        sessionEnvironment: () => sessionEnvironment(ctx),
+      });
+      const previous = manager;
+      manager = next;
+      if (previous !== undefined) await previous.shutdown();
+    });
+
+    pi.on("session_shutdown", async () => {
+      const current = manager;
+      manager = undefined;
+      if (current !== undefined) await current.shutdown();
+    });
+  };
+}
+
+/** Register the production wait-compatible override. */
+export default createBackgroundProcessesExtension();
