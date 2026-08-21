@@ -60,11 +60,34 @@ describe("real Pi runtime loading", () => {
         details: undefined,
       });
       await expect(
-        bash.execute("real-load-background", {
+        bash.execute("real-load-headless-background", {
           command: "true",
           mode: "background",
         }),
-      ).rejects.toThrow("not implemented yet");
+      ).rejects.toThrow(
+        "available only in TUI and RPC modes; current mode is `print`",
+      );
+
+      await session.bindExtensions({ mode: "rpc" });
+      const background = await bash.execute("real-load-rpc-background", {
+        command: "printf detached-smoke",
+        mode: "background",
+      });
+      const backgroundContent = background.content[0];
+      if (backgroundContent?.type !== "text") {
+        throw new Error("Expected detached text result");
+      }
+      expect(backgroundContent.text).toMatch(
+        /^Started background process `p1` \(PID \d+\)\.$/,
+      );
+      expect(background.details).toMatchObject({
+        process: {
+          kind: "started",
+          id: "p1",
+          mode: "background",
+          command: "printf detached-smoke",
+        },
+      });
 
       await session.extensionRunner.emit({
         type: "session_shutdown",

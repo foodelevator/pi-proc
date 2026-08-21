@@ -4,7 +4,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import { ProcessManager } from "./process-manager";
-import { registerWaitBashTool } from "./tools/bash";
+import { registerBashTool } from "./tools/bash";
 
 export { OutputStore } from "./output-store";
 export {
@@ -20,6 +20,8 @@ export {
 export type {
   ProcessLookupFailure,
   ProcessManagerCallbacks,
+  ProcessManagerEvent,
+  ProcessManagerEventListener,
   ProcessManagerOptions,
   ProcessOutputListener,
   ProcessStateFailure,
@@ -43,11 +45,16 @@ export type {
 export {
   bashSchema,
   BASH_UPDATE_THROTTLE_MS,
+  createBashTool,
   createWaitBashTool,
+  registerBashTool,
   registerWaitBashTool,
 } from "./tools/bash";
 export type {
+  BackgroundBashToolDetails,
   BackgroundBashToolInput,
+  BashProcessDescriptor,
+  BashToolOptions,
   WaitBashToolOptions,
 } from "./tools/bash";
 export type {
@@ -97,7 +104,7 @@ export interface BackgroundProcessesExtensionOptions {
   ) => ProcessManager;
 }
 
-/** Build the wait override with one manager per Pi session runtime. */
+/** Build the bash override with one manager per Pi session runtime. */
 export function createBackgroundProcessesExtension(
   options: BackgroundProcessesExtensionOptions = {},
 ): (pi: ExtensionAPI) => void {
@@ -107,7 +114,7 @@ export function createBackgroundProcessesExtension(
   return (pi) => {
     let manager: ProcessManager | undefined;
 
-    registerWaitBashTool(pi, { getManager: () => manager });
+    registerBashTool(pi, { getManager: () => manager });
 
     pi.on("session_start", async (_event, ctx) => {
       const next = createManager({
@@ -127,5 +134,5 @@ export function createBackgroundProcessesExtension(
   };
 }
 
-/** Register the production wait-compatible override. */
+/** Register the production managed-process bash override. */
 export default createBackgroundProcessesExtension();

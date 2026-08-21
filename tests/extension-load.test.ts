@@ -45,6 +45,7 @@ describe("extension loading", () => {
       const sessionFile = join(cwd, "session.jsonl");
       const ctx = {
         cwd,
+        mode: "tui",
         sessionManager: {
           getSessionId: () => "session-load-test",
           getSessionFile: () => sessionFile,
@@ -73,6 +74,17 @@ describe("extension loading", () => {
           text: `${realpathSync(cwd)}|session-load-test|${sessionFile}|test-provider|test-model|high`,
         }],
         details: undefined,
+      });
+
+      const detached = await bash.execute(
+        "managed-load-smoke",
+        { command: "true", mode: "monitor" },
+        undefined,
+        undefined,
+        ctx,
+      );
+      expect(detached.details).toMatchObject({
+        process: { kind: "started", id: "p1", mode: "monitor" },
       });
 
       const shutdown = extension?.handlers.get("session_shutdown")?.[0];

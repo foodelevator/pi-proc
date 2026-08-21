@@ -108,18 +108,32 @@ export type ProcessOutputListener = (
   chunk: Buffer,
 ) => void;
 
+export type ProcessManagerEvent =
+  | {
+      type: "stdout-activity";
+      process: ManagedProcessRecord;
+    }
+  | {
+      type: "completed";
+      process: ManagedProcessRecord;
+      completion: ProcessCompletion;
+    };
+
+export type ProcessManagerEventListener = (event: ProcessManagerEvent) => void;
+
 export interface ProcessManagerCallbacks {
   onOutput?: (
     execution: ProcessExecution,
     source: ProcessOutputSource,
     chunk: Buffer,
   ) => void;
-  /** Called only for stdout, after the chunk is in the combined output store. */
-  onStdoutActivity?: (execution: ProcessExecution, chunk: Buffer) => void;
+  /** Called only for managed monitor stdout, after it is in the output store. */
+  onStdoutActivity?: (record: ManagedProcessRecord, chunk: Buffer) => void;
   onStarted?: (execution: ProcessExecution) => void;
   onPromoted?: (record: ManagedProcessRecord) => void;
+  /** Called only for public managed records, including fast exits. */
   onCompleted?: (
-    execution: ProcessExecution,
+    record: ManagedProcessRecord,
     completion: ProcessCompletion,
   ) => void;
   onCallbackError?: (error: Error) => void;
@@ -162,6 +176,7 @@ interface InternalProcess extends ProcessExecution {
   tracked: boolean;
   completionResult?: ProcessCompletion;
   completionNotified: boolean;
+  pendingStdoutActivity?: Buffer;
 }
 
 function deferred<T>(): Deferred<T> {
@@ -354,6 +369,7 @@ export class ProcessManager {
     ProcessExecution,
     Set<ProcessOutputListener>
   >();
+  readonly #eventListeners = new Set<ProcessManagerEventListener>();
   readonly #historical = new Map<string, HistoricalProcessRecord>();
   #nextProcessNumber: number;
   #acceptingStarts = true;
@@ -410,6 +426,14 @@ export class ProcessManager {
 
   get foregroundExecutions(): readonly ForegroundExecution[] {
     return [...this.#foreground] as ForegroundExecution[];
+  }
+
+  /** Subscribe to public monitor activity and public process completion events. */
+  subscribeEvents(listener: ProcessManagerEventListener): () => void {
+    this.#eventListeners.add(listener);
+    return () => {
+      this.#eventListeners.delete(listener);
+    };
   }
 
   /** Subscribe to combined output after it has been appended to the store. */
@@ -754,11 +778,12 @@ export class ProcessManager {
         },
         onStdoutActivity: (chunk) => {
           const execution = processHolder.current;
-          if (execution !== undefined) {
-            callSafely(this.#callbacks.onCallbackError, () => {
-              this.#callbacks.onStdoutActivity?.(execution, chunk);
-            });
+          if (execution === undefined || execution.mode !== "monitor") return;
+          if (execution.id === undefined || !execution.tracked) {
+            execution.pendingStdoutActivity ??= chunk;
+            return;
           }
+          this.#emitStdoutActivity(execution, chunk);
         },
         onCallbackError: this.#callbacks.onCallbackError,
       });
@@ -888,7 +913,33 @@ export class ProcessManager {
     callSafely(this.#callbacks.onCallbackError, () => {
       this.#callbacks.onStarted?.(internal);
     });
+    if (
+      internal.id !== undefined
+      && internal.mode === "monitor"
+      && internal.pendingStdoutActivity !== undefined
+    ) {
+      const chunk = internal.pendingStdoutActivity;
+      internal.pendingStdoutActivity = undefined;
+      this.#emitStdoutActivity(internal, chunk);
+    }
     this.#notifyCompletion(internal);
+  }
+
+  #emitStdoutActivity(internal: InternalProcess, chunk: Buffer): void {
+    if (internal.id === undefined || internal.mode !== "monitor") return;
+    const record = internal as ManagedProcessRecord;
+    callSafely(this.#callbacks.onCallbackError, () => {
+      this.#callbacks.onStdoutActivity?.(record, chunk);
+    });
+    this.#emitEvent({ type: "stdout-activity", process: record });
+  }
+
+  #emitEvent(event: ProcessManagerEvent): void {
+    for (const listener of [...this.#eventListeners]) {
+      callSafely(this.#callbacks.onCallbackError, () => {
+        listener(event);
+      });
+    }
   }
 
   #notifyCompletion(internal: InternalProcess): void {
@@ -900,10 +951,13 @@ export class ProcessManager {
       return;
     }
     internal.completionNotified = true;
+    if (internal.id === undefined) return;
     const completion = internal.completionResult;
+    const record = internal as ManagedProcessRecord;
     callSafely(this.#callbacks.onCallbackError, () => {
-      this.#callbacks.onCompleted?.(internal, completion);
+      this.#callbacks.onCompleted?.(record, completion);
     });
+    this.#emitEvent({ type: "completed", process: record, completion });
   }
 
   #activeExecutions(): InternalProcess[] {

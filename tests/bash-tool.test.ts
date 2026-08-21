@@ -11,12 +11,18 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ProcessManager } from "../background-processes/process-manager";
 import {
   bashSchema,
-  createWaitBashTool,
+  createBashTool,
+  type BackgroundBashToolDetails,
 } from "../background-processes/tools/bash";
 
 const managers: ProcessManager[] = [];
 const spillPaths: string[] = [];
-const context = {} as ExtensionContext;
+const context = { mode: "tui" } as ExtensionContext;
+
+function contextFor(mode: ExtensionContext["mode"]): ExtensionContext {
+  // Minimal execution context fixture; the tool reads only mode in these tests.
+  return { ...context, mode };
+}
 
 function makeManager(
   options: ConstructorParameters<typeof ProcessManager>[0] = {},
@@ -27,21 +33,22 @@ function makeManager(
 }
 
 function toolFor(manager: ProcessManager) {
-  return createWaitBashTool({ getManager: () => manager });
+  return createBashTool({ getManager: () => manager });
 }
 
 async function execute(
   manager: ProcessManager,
   params: { command: string; mode?: "wait" | "background" | "monitor"; timeout?: number },
   signal?: AbortSignal,
-  onUpdate?: (result: AgentToolResult<BashToolDetails | undefined>) => void,
+  onUpdate?: (result: AgentToolResult<BackgroundBashToolDetails | undefined>) => void,
+  executionContext: ExtensionContext = context,
 ) {
   return toolFor(manager).execute(
     "tool-call",
     params,
     signal,
     onUpdate,
-    context,
+    executionContext,
   );
 }
 
@@ -80,20 +87,153 @@ describe("bash override schema", () => {
     const modeDescription = modeSchema.description;
     expect(modeDescription).toBeTypeOf("string");
     if (typeof modeDescription === "string") {
-      expect(modeDescription).toContain("not implemented yet");
+      expect(modeDescription).toContain("returns immediately");
+      expect(modeDescription).not.toContain("not implemented");
     }
   });
+});
 
+describe("managed bash execution", () => {
   it.each(["background", "monitor"] as const)(
-    "fails clearly for deferred %s behavior",
+    "returns a stable started descriptor for %s mode",
     async (mode) => {
       const manager = makeManager();
-      await expect(execute(manager, { command: "true", mode })).rejects.toThrow(
-        `Bash mode \`${mode}\` is not implemented yet`,
+
+      const result = await execute(manager, {
+        command: "printf ready; sleep 0.03",
+        mode,
+      });
+      const descriptor = result.details?.process;
+
+      const content = result.content[0];
+      if (content?.type !== "text") throw new Error("Expected text result");
+      expect(content.text).toMatch(
+        /^Started (background|monitor) process `p1` \(PID \d+\)\.$/,
+      );
+      expect(content.text).toContain(`Started ${mode} process`);
+      expect(descriptor).toMatchObject({
+        kind: "started",
+        id: "p1",
+        mode,
+        command: "printf ready; sleep 0.03",
+        cwd: process.cwd(),
+      });
+      expect(descriptor?.pid).toBeTypeOf("number");
+      expect(descriptor?.startedAt).toBeTypeOf("number");
+      expect(descriptor).not.toHaveProperty("completedAt");
+      expect(manager.getProcess("p1")).toBeDefined();
+      await manager.getProcess("p1").completion;
+    },
+  );
+
+  it("returns a started descriptor for a fast exit and retains its completion", async () => {
+    const manager = makeManager();
+    const events: string[] = [];
+    manager.subscribeEvents((event) => {
+      events.push(`${event.type}:${event.process.id}`);
+    });
+
+    const result = await execute(manager, {
+      command: "printf fast",
+      mode: "background",
+    });
+    const descriptor = result.details?.process;
+    if (descriptor === undefined) throw new Error("Expected process descriptor");
+    const record = manager.getProcess(descriptor.id);
+    await record.completion;
+
+    expect(descriptor).toMatchObject({ kind: "started", id: "p1" });
+    expect(record.completedAt).toBeDefined();
+    expect(record.outputStore.readRange(0).content).toBe("fast");
+    expect(events).toEqual(["completed:p1"]);
+  });
+
+  it("keeps a detached timeout active after returning the tool result", async () => {
+    const manager = makeManager();
+
+    const result = await execute(manager, {
+      command: "sleep 30",
+      mode: "background",
+      timeout: 0.04,
+    });
+    expect(result.details?.process).toMatchObject({
+      id: "p1",
+      timeoutSeconds: 0.04,
+    });
+
+    const completion = await manager.getProcess("p1").completion;
+    expect(completion).toMatchObject({ timedOut: true, exitSignal: "SIGKILL" });
+  });
+
+  it.each(["print", "json"] as const)(
+    "rejects detached execution in %s mode without spawning",
+    async (extensionMode) => {
+      const manager = makeManager();
+
+      await expect(execute(
+        manager,
+        { command: "true", mode: "background" },
+        undefined,
+        undefined,
+        contextFor(extensionMode),
+      )).rejects.toThrow(
+        `available only in TUI and RPC modes; current mode is \`${extensionMode}\``,
       );
       expect(manager.records).toHaveLength(0);
     },
   );
+
+  it.each(["print", "json"] as const)(
+    "preserves ordinary wait execution in %s mode",
+    async (extensionMode) => {
+      const manager = makeManager();
+
+      const result = await execute(
+        manager,
+        { command: "printf headless-wait" },
+        undefined,
+        undefined,
+        contextFor(extensionMode),
+      );
+
+      expect(result).toEqual({
+        content: [{ type: "text", text: "headless-wait" }],
+        details: undefined,
+      });
+      expect(manager.records).toHaveLength(0);
+    },
+  );
+
+  it("accepts detached execution in RPC mode", async () => {
+    const manager = makeManager();
+
+    const result = await execute(
+      manager,
+      { command: "true", mode: "monitor" },
+      undefined,
+      undefined,
+      contextFor("rpc"),
+    );
+
+    expect(result.details?.process).toMatchObject({ id: "p1", mode: "monitor" });
+    await manager.getProcess("p1").completion;
+  });
+
+  it("allocates unique IDs for parallel detached tool calls", async () => {
+    const manager = makeManager();
+
+    const results = await Promise.all(
+      Array.from({ length: 8 }, (_, index) => execute(manager, {
+        command: `printf ${index}`,
+        mode: index % 2 === 0 ? "background" : "monitor",
+      })),
+    );
+
+    expect(results.map((result) => result.details?.process?.id).sort()).toEqual(
+      ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"],
+    );
+    await Promise.all(manager.records.map(async (record) => record.completion));
+  });
 });
 
 describe("wait-compatible bash execution", () => {

@@ -2,9 +2,9 @@
 
 A distributable multi-file [Pi](https://pi.dev) extension package for managing background processes.
 
-The current implementation provides the POSIX process-management core, combined output store, and a Pi-compatible `bash` override for ordinary foreground waits. Wait mode is the default, streams combined stdout/stderr through throttled updates, preserves Pi's tail truncation and spill metadata, handles timeout/cancellation/failure as errored tool calls, and does not expose process IDs or history.
+The current implementation provides the POSIX process-management core, combined output store, and a Pi-compatible managed-process `bash` override. Wait mode remains the default: it streams combined stdout/stderr through throttled updates, preserves Pi's tail truncation and spill metadata, and reports timeout, cancellation, and failures as errored tool calls.
 
-The registered schema already includes `mode: "wait" | "background" | "monitor"`, but background and monitor calls currently fail with a clear not-implemented error. Their public lifecycle, along with steering, auxiliary tools, notifications, persistence, and TUI integration, is implemented in later stages.
+`mode: "background"` and `mode: "monitor"` start a retained managed process and immediately return a stable `pN` process descriptor. Both modes retain output and completion state, continue enforcing optional timeouts after the tool returns, and emit manager completion events. Monitor mode additionally emits manager stdout-activity events; background mode remains quiet until completion. Detached modes are available only in TUI and RPC sessions, while print and JSON sessions remain wait-only. Steering detachment, auxiliary tools, user-facing notification batching, persistence, and TUI widgets are implemented in later stages.
 
 Only macOS and Linux are supported. Shell-level detachment (`&`, `nohup`, and daemonization) is unsupported because inherited pipe and lifecycle ownership become ambiguous; use the process mode exposed by the extension instead.
 

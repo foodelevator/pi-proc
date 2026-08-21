@@ -13,7 +13,11 @@ import { type Static, Type } from "typebox";
 
 import type { OutputStore } from "../output-store";
 import type { ProcessManager } from "../process-manager";
-import type { ForegroundExecution } from "../types";
+import type {
+  ForegroundExecution,
+  ManagedProcessRecord,
+  PublicProcessMode,
+} from "../types";
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
@@ -25,7 +29,7 @@ export const bashSchema = Type.Object({
   mode: Type.Optional(
     StringEnum(["wait", "background", "monitor"] as const, {
       description:
-        "Execution mode (default: wait). Background and monitor are not implemented yet; use wait.",
+        "Execution mode (default: wait). Background returns immediately and reports completion later; monitor also reports stdout activity.",
     }),
   ),
   timeout: Type.Optional(
@@ -37,11 +41,30 @@ export const bashSchema = Type.Object({
 
 export type BackgroundBashToolInput = Static<typeof bashSchema>;
 
-export interface WaitBashToolOptions {
+export interface BashProcessDescriptor {
+  kind: "started";
+  id: string;
+  mode: PublicProcessMode;
+  command: string;
+  cwd: string;
+  pid: number;
+  startedAt: number;
+  timeoutSeconds?: number;
+}
+
+/** Details remain compatible with Pi's built-in bash renderer and persistence. */
+export interface BackgroundBashToolDetails extends BashToolDetails {
+  process?: BashProcessDescriptor;
+}
+
+export interface BashToolOptions {
   getManager: () => ProcessManager | undefined;
   /** Test seam; production matches Pi's 100 ms update throttle. */
   updateThrottleMs?: number;
 }
+
+/** @deprecated Use BashToolOptions. */
+export type WaitBashToolOptions = BashToolOptions;
 
 interface BashOutputSnapshot {
   content: string;
@@ -130,9 +153,39 @@ function appendStatus(text: string, status: string): string {
   return `${text ? `${text}\n\n` : ""}${status}`;
 }
 
-export function createWaitBashTool(
-  options: WaitBashToolOptions,
-): ToolDefinition<typeof bashSchema, BashToolDetails | undefined> {
+function startedProcessResult(
+  record: ManagedProcessRecord,
+  timeoutSeconds: number | undefined,
+): {
+  content: [{ type: "text"; text: string }];
+  details: BackgroundBashToolDetails;
+} {
+  const descriptor: BashProcessDescriptor = {
+    kind: "started",
+    id: record.id,
+    mode: record.mode,
+    command: record.command,
+    cwd: record.cwd,
+    pid: record.pid,
+    startedAt: record.startedAt,
+    ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
+  };
+  const timeoutText = timeoutSeconds === undefined
+    ? ""
+    : ` Timeout: ${timeoutSeconds} seconds.`;
+  return {
+    content: [{
+      type: "text",
+      text:
+        `Started ${record.mode} process \`${record.id}\` (PID ${record.pid}).${timeoutText}`,
+    }],
+    details: { process: descriptor },
+  };
+}
+
+export function createBashTool(
+  options: BashToolOptions,
+): ToolDefinition<typeof bashSchema, BackgroundBashToolDetails | undefined> {
   const updateThrottleMs = options.updateThrottleMs
     ?? BASH_UPDATE_THROTTLE_MS;
   if (!Number.isFinite(updateThrottleMs) || updateThrottleMs < 0) {
@@ -142,26 +195,37 @@ export function createWaitBashTool(
   return {
     name: "bash",
     label: "bash",
-    description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Mode defaults to wait; background and monitor are reserved for managed execution. Optionally provide a timeout in seconds.`,
+    description: `Execute a bash command in the current working directory. Mode defaults to wait. Wait returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first), and streams updates. Background starts a managed process and returns its process ID immediately; monitor additionally reports later stdout activity. Background and monitor require TUI or RPC mode. If wait output is truncated, full output is saved to a temp file. Optional timeouts apply in every mode. Shell-level &, nohup, and daemonization are unsupported; use mode instead.`,
     promptSnippet: "Execute bash commands (ls, grep, find, etc.)",
     promptGuidelines: [
       "You can inspect PI_* environment variables for current model and session details.",
     ],
     parameters: bashSchema,
 
-    async execute(_toolCallId, params, signal, onUpdate) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const mode = params.mode ?? "wait";
-      if (mode !== "wait") {
-        throw new Error(
-          `Bash mode \`${mode}\` is not implemented yet; use mode \`wait\``,
-        );
-      }
       const timeoutMs = resolveTimeoutMs(params.timeout);
       if (signal?.aborted) throw new Error("Command aborted");
+      if (
+        mode !== "wait"
+        && ctx.mode !== "tui"
+        && ctx.mode !== "rpc"
+      ) {
+        throw new Error(
+          `Bash mode \`${mode}\` is available only in TUI and RPC modes; current mode is \`${ctx.mode}\`. Use mode \`wait\` instead.`,
+        );
+      }
 
       const manager = options.getManager();
       if (manager === undefined) {
         throw new Error("Bash process manager is unavailable for this session");
+      }
+      if (mode !== "wait") {
+        const record = await manager.startManaged(params.command, {
+          mode,
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        });
+        return startedProcessResult(record, params.timeout);
       }
 
       let execution: ForegroundExecution | undefined;
@@ -272,9 +336,14 @@ export function createWaitBashTool(
   };
 }
 
-export function registerWaitBashTool(
+export function registerBashTool(
   pi: ExtensionAPI,
-  options: WaitBashToolOptions,
+  options: BashToolOptions,
 ): void {
-  pi.registerTool(createWaitBashTool(options));
+  pi.registerTool(createBashTool(options));
 }
+
+/** @deprecated Use createBashTool. */
+export const createWaitBashTool = createBashTool;
+/** @deprecated Use registerBashTool. */
+export const registerWaitBashTool = registerBashTool;

@@ -174,6 +174,43 @@ describe("POSIX shell spawning", () => {
     );
   });
 
+  it("emits clean managed events while keeping background and waits stdout-quiet", async () => {
+    const callbackActivity: string[] = [];
+    const processes = manager({
+      onStdoutActivity: (record) => callbackActivity.push(record.id),
+    });
+    const events: string[] = [];
+    processes.subscribeEvents((event) => {
+      events.push(`${event.type}:${event.process.id}`);
+    });
+
+    const background = await processes.startManaged(
+      "sleep 0.02; printf background-out",
+      { mode: "background" },
+    );
+    const monitor = await processes.startManaged(
+      "printf monitor-err >&2; sleep 0.02; printf monitor-out",
+      { mode: "monitor" },
+    );
+    const foreground = await processes.startForeground(
+      "sleep 0.02; printf foreground-out",
+    );
+    await Promise.all([
+      background.completion,
+      monitor.completion,
+      foreground.completion,
+    ]);
+
+    expect(callbackActivity).toEqual([monitor.id]);
+    expect(events.filter((event) => event.startsWith("stdout-activity:"))).toEqual([
+      `stdout-activity:${monitor.id}`,
+    ]);
+    expect(events.filter((event) => event.startsWith("completed:")).sort()).toEqual([
+      `completed:${background.id}`,
+      `completed:${monitor.id}`,
+    ].sort());
+  });
+
   it("keeps reading active post-exit pipes until they end", async () => {
     const processes = manager({ pipeIdleMs: 100 });
     const record = await processes.startManaged(
