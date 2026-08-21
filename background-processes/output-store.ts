@@ -227,12 +227,7 @@ export class OutputStore {
   }
 
   read(options: OutputReadOptions = {}): OutputReadResult {
-    return this.#read(options, false);
-  }
-
-  /** Return the complete-output tail without consuming the delivered cursor. */
-  snapshotTail(length?: number): OutputReadResult {
-    return this.#read(length === undefined ? {} : { length }, true);
+    return this.#read(options);
   }
 
   /**
@@ -254,6 +249,9 @@ export class OutputStore {
       && this.#readBytes(start - 1, start)[0] !== NEWLINE
     ) {
       const firstNewline = bytes.indexOf(NEWLINE);
+      // Deliberately retain a partial line when the window's only newline is
+      // its final byte. Pi's rolling accumulator drops all output for a >200KB
+      // newline-terminated single line; keeping its last 50KB is more useful.
       if (firstNewline !== -1 && firstNewline < bytes.length - 1) {
         bytes = bytes.subarray(firstNewline + 1);
       }
@@ -261,17 +259,12 @@ export class OutputStore {
     return bytes.toString("utf8");
   }
 
-  #read(
-    options: OutputReadOptions,
-    snapshotTail: boolean,
-  ): OutputReadResult {
+  #read(options: OutputReadOptions): OutputReadResult {
     const snapshotEnd = this.#totalBytes;
     const snapshotLines = this.totalLines;
     const cursorBefore = this.#deliveredCursor;
     const explicit = options.start !== undefined;
-    const start = snapshotTail
-      ? 0
-      : options.start === undefined
+    const start = options.start === undefined
       ? cursorBefore
       : requireNonNegativeInteger(options.start, "start");
     const requestedLength = options.length === undefined
@@ -349,7 +342,7 @@ export class OutputStore {
       0,
     );
 
-    if (!explicit && !snapshotTail) this.#deliveredCursor = snapshotEnd;
+    if (!explicit) this.#deliveredCursor = snapshotEnd;
 
     return {
       content: bytes.toString("utf8"),

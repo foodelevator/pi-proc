@@ -250,24 +250,6 @@ describe("OutputStore implicit reads", () => {
     });
   });
 
-  it("snapshots the complete tail repeatedly without consuming the cursor", () => {
-    const { store } = makeStore({ maxReadBytes: 8, maxReadLines: 2 });
-    store.append("partial-line\none\ntwo\nthree");
-
-    const first = store.snapshotTail();
-    const second = store.snapshotTail();
-
-    expect(first).toMatchObject({
-      content: "three",
-      requestedRange: { start: 0, end: 26 },
-      returnedRange: { start: 21, end: 26 },
-      truncation: { truncated: true },
-      cursor: { before: 0, after: 0, advanced: false },
-    });
-    expect(second).toEqual(first);
-    expect(store.deliveredCursor).toBe(0);
-  });
-
   it("decodes a wider snapshot tail without a leading partial line or cursor movement", () => {
     const { store } = makeStore();
     store.append("discard-me\nkeep");
