@@ -8,6 +8,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
+import { PROCESS_NOTIFICATION_MESSAGE_TYPE } from "../background-processes/notification-scheduler";
+
 describe("extension loading", () => {
   it("loads the package, creates a session manager, and executes the bash override", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "pibg-extension-cwd-"));
@@ -36,7 +38,7 @@ describe("extension loading", () => {
       expect(result.errors).toEqual([]);
       expect(result.extensions).toHaveLength(1);
       extension = result.extensions[0];
-      expect(extension?.messageRenderers.has("pibg-process-events")).toBe(true);
+      expect(extension?.messageRenderers.has(PROCESS_NOTIFICATION_MESSAGE_TYPE)).toBe(true);
       const bash = extension?.tools.get("bash")?.definition;
       expect([...(extension?.tools.keys() ?? [])]).toEqual([
         "bash",

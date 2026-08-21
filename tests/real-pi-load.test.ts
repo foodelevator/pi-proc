@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 
+import { PROCESS_NOTIFICATION_MESSAGE_TYPE } from "../background-processes/notification-scheduler";
 import { PROCESS_RUNTIME_END_ENTRY_TYPE } from "../background-processes/persistence";
 import type {
   ProcessKillToolDetails,
@@ -182,7 +183,7 @@ describe("real Pi runtime loading", () => {
       );
       expect(firstNotification).toMatchObject({
         message: {
-          customType: "pibg-process-events",
+          customType: PROCESS_NOTIFICATION_MESSAGE_TYPE,
           display: true,
           details: {
             processes: [{
@@ -375,7 +376,7 @@ describe("real Pi runtime loading", () => {
       await waitUntil(() => notifications.length === 1);
       expect(notifications[0]).toMatchObject({
         message: {
-          customType: "pibg-process-events",
+          customType: PROCESS_NOTIFICATION_MESSAGE_TYPE,
           details: {
             processes: [{
               id: "p1",

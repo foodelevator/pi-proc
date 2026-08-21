@@ -143,6 +143,11 @@ describe("auxiliary tool schemas and prompts", () => {
     expect(auxiliary.write.description).toContain("never appends a newline");
     expect(auxiliary.kill.description).toContain("never escalates automatically");
     expect(auxiliary.list.description).toContain("active processes only");
+    const includeCompletedSchema = auxiliary.list.parameters.properties
+      .include_completed as unknown as { description?: string };
+    expect(includeCompletedSchema.description).toContain(
+      "historical-runtime tombstones",
+    );
     await expect(auxiliary.kill.execute("invalid-signal", {
       id: "p1",
       signal: "NOT_A_SIGNAL",

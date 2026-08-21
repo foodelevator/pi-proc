@@ -456,6 +456,22 @@ describe("stdin, signals, and shutdown", () => {
     expect(kill).toMatchObject({ sent: true, exited: true });
   });
 
+  it("ignores unsafe historical IDs without corrupting allocation", async () => {
+    const processes = manager();
+    processes.registerHistoricalProcess({
+      id: `p${Number.MAX_SAFE_INTEGER}`,
+      command: "fabricated unsafe history",
+    });
+
+    expect(processes.historicalRecords).toEqual([]);
+    expect(() => processes.getProcess(`p${Number.MAX_SAFE_INTEGER}`)).toThrowError(
+      expect.objectContaining<Partial<ProcessLookupError>>({ kind: "unknown" }),
+    );
+    const first = await processes.startManaged("true");
+    expect(first.id).toBe("p1");
+    await first.completion;
+  });
+
   it("distinguishes completed, historical, and unknown process IDs", async () => {
     const processes = manager();
     const record = await processes.startManaged("true");

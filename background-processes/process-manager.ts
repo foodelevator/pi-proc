@@ -4,6 +4,7 @@ import { access } from "node:fs/promises";
 import { constants as osConstants } from "node:os";
 
 import { OutputStore } from "./output-store";
+import { MAX_RESTORABLE_PROCESS_NUMBER } from "./types";
 import {
   assertSupportedPlatform,
   createPiProcessEnvironment,
@@ -221,8 +222,14 @@ function requireNonNegativeTimer(value: number, name: string): number {
 }
 
 function requireProcessNumber(value: number): number {
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new RangeError("initialProcessNumber must be a positive safe integer");
+  if (
+    !Number.isSafeInteger(value)
+    || value <= 0
+    || value >= Number.MAX_SAFE_INTEGER
+  ) {
+    throw new RangeError(
+      "initialProcessNumber must be a positive safely incrementable integer",
+    );
   }
   return value;
 }
@@ -632,12 +639,15 @@ export class ProcessManager {
 
   registerHistoricalProcess(record: HistoricalProcessRecord): void {
     if (this.#records.has(record.id)) return;
-    this.#historical.set(record.id, record);
-
     const match = /^p([1-9]\d*)$/.exec(record.id);
     if (match === null) return;
     const processNumber = Number(match[1]);
-    if (!Number.isSafeInteger(processNumber)) return;
+    if (
+      !Number.isSafeInteger(processNumber)
+      || processNumber > MAX_RESTORABLE_PROCESS_NUMBER
+    ) return;
+
+    this.#historical.set(record.id, record);
     this.#nextProcessNumber = Math.max(
       this.#nextProcessNumber,
       processNumber + 1,
@@ -984,7 +994,10 @@ export class ProcessManager {
     ) {
       this.#nextProcessNumber++;
     }
-    if (!Number.isSafeInteger(this.#nextProcessNumber)) {
+    if (
+      !Number.isSafeInteger(this.#nextProcessNumber)
+      || this.#nextProcessNumber >= Number.MAX_SAFE_INTEGER
+    ) {
       throw new RangeError("Managed process ID space is exhausted");
     }
     internal.id = `p${this.#nextProcessNumber++}`;

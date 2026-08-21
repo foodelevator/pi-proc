@@ -307,6 +307,49 @@ describe("session-scoped ProcessManager lifecycle", () => {
     await shutdown({ type: "session_shutdown", reason: "quit" } as never, ctx);
   });
 
+  it("does not append an empty runtime-ending entry", async () => {
+    type Handler = (event: never, ctx: ExtensionContext) => void | Promise<void>;
+    const handlers = new Map<string, Handler[]>();
+    const appended: unknown[] = [];
+    const pi = {
+      registerTool() {},
+      registerMessageRenderer() {},
+      sendMessage() {},
+      appendEntry(customType: string, data: unknown) {
+        appended.push({ customType, data });
+      },
+      on(event: string, handler: Handler) {
+        const registered = handlers.get(event) ?? [];
+        registered.push(handler);
+        handlers.set(event, registered);
+      },
+    } as unknown as ExtensionAPI;
+    createBackgroundProcessesExtension({
+      createManager(options) {
+        const manager = new ProcessManager({ ...options, pipeIdleMs: 30 });
+        managers.push(manager);
+        return manager;
+      },
+    })(pi);
+    const ctx = {
+      cwd: process.cwd(),
+      isIdle: () => true,
+      sessionManager: {
+        getSessionId: () => "empty-runtime",
+        getSessionFile: () => undefined,
+        getEntries: () => [],
+      },
+    } as unknown as ExtensionContext;
+    const start = handlers.get("session_start")?.[0];
+    const shutdown = handlers.get("session_shutdown")?.[0];
+    if (start === undefined || shutdown === undefined) throw new Error("Missing lifecycle handlers");
+
+    await start({ type: "session_start", reason: "startup" } as never, ctx);
+    await shutdown({ type: "session_shutdown", reason: "quit" } as never, ctx);
+
+    expect(appended).toEqual([]);
+  });
+
   it("does nothing to active processes on tree navigation", async () => {
     type Handler = (event: never, ctx: ExtensionContext) => void | Promise<void>;
     const handlers = new Map<string, Handler[]>();

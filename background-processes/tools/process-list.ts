@@ -18,7 +18,7 @@ export const processListSchema = Type.Object({
   include_completed: Type.Optional(
     Type.Boolean({
       description:
-        "Include completed processes retained in this runtime (default: false)",
+        "Include completed processes from this runtime and historical-runtime tombstones (default: false)",
     }),
   ),
 });

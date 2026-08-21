@@ -141,6 +141,7 @@ export type {
   ManagedProcessStatus,
   ProcessToolOptions,
 } from "./tools/process-utils";
+export { MAX_RESTORABLE_PROCESS_NUMBER } from "./types";
 export type {
   ByteRange,
   ForegroundExecution,
@@ -317,6 +318,7 @@ export function createBackgroundProcessesExtension(
       let persistenceError: unknown;
       if (
         current !== undefined
+        && current.records.length > 0
         && currentRuntimeId !== undefined
         && hasSessionEntries(ctx)
       ) {

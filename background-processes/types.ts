@@ -73,6 +73,9 @@ export interface OutputStoreOptions {
   createSpillPath?: () => string;
 }
 
+/** Upper bound accepted from durable history; leaves ample safe-integer allocator headroom. */
+export const MAX_RESTORABLE_PROCESS_NUMBER = 0xffff_ffff;
+
 export type ProcessMode = "wait" | "background" | "monitor";
 export type PublicProcessMode = Exclude<ProcessMode, "wait">;
 export type ProcessOutputSource = "stdout" | "stderr";

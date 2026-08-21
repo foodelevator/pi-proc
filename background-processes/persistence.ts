@@ -1,9 +1,11 @@
 import type { SessionShutdownEvent } from "@earendil-works/pi-coding-agent";
 
-import type {
-  HistoricalProcessRecord,
-  ManagedProcessRecord,
-  ProcessMode,
+import { PROCESS_NOTIFICATION_MESSAGE_TYPE } from "./notification-scheduler";
+import {
+  MAX_RESTORABLE_PROCESS_NUMBER,
+  type HistoricalProcessRecord,
+  type ManagedProcessRecord,
+  type ProcessMode,
 } from "./types";
 
 export const PROCESS_RUNTIME_END_ENTRY_TYPE = "pibg-process-runtime-ending";
@@ -55,13 +57,6 @@ export interface ProcessPersistenceRecovery {
 type UnknownRecord = Record<string, unknown>;
 
 const PROCESS_ID = /^p([1-9]\d*)$/;
-const RELEVANT_TOOL_NAMES = new Set([
-  "bash",
-  "process_read",
-  "process_write",
-  "process_kill",
-  "process_list",
-]);
 const SHUTDOWN_REASONS = new Set<ProcessRuntimeShutdownReason>([
   "quit",
   "reload",
@@ -113,7 +108,10 @@ function processNumber(id: string): number | undefined {
   const match = PROCESS_ID.exec(id);
   if (match === null) return undefined;
   const parsed = Number(match[1]);
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
+  return Number.isSafeInteger(parsed)
+      && parsed <= MAX_RESTORABLE_PROCESS_NUMBER
+    ? parsed
+    : undefined;
 }
 
 function priorState(value: UnknownRecord): HistoricalProcessRecord["priorState"] {
@@ -231,42 +229,59 @@ function unknownMessage(record: HistoricalProcessRecord): string {
   return `Process \`${record.id}\` belonged to a previous runtime that ended unexpectedly; its final status is unknown.`;
 }
 
-function scanProcessObjects(
+function ingestObservation(
   value: unknown,
   ingest: (record: HistoricalProcessRecord) => void,
-  seen = new Set<object>(),
 ): void {
-  if (Array.isArray(value)) {
-    if (seen.has(value)) return;
-    seen.add(value);
-    for (const item of value) scanProcessObjects(item, ingest, seen);
+  const candidate = object(value);
+  const parsed = candidate === undefined ? undefined : observation(candidate);
+  if (parsed !== undefined) ingest(parsed);
+}
+
+function ingestObservationArray(
+  value: unknown,
+  ingest: (record: HistoricalProcessRecord) => void,
+): void {
+  if (!Array.isArray(value)) return;
+  for (const item of value) ingestObservation(item, ingest);
+}
+
+/** Only inspect the documented details slots emitted by this extension's tools. */
+function ingestToolDetails(
+  toolName: string,
+  value: unknown,
+  ingest: (record: HistoricalProcessRecord) => void,
+): void {
+  const details = object(value);
+  if (details === undefined) return;
+  if (toolName === "process_list") {
+    ingestObservationArray(details.processes, ingest);
     return;
   }
-  const candidate = object(value);
-  if (candidate === undefined || seen.has(candidate)) return;
-  seen.add(candidate);
-  const parsed = observation(candidate);
-  if (parsed !== undefined) ingest(parsed);
-  for (const nested of Object.values(candidate)) {
-    scanProcessObjects(nested, ingest, seen);
+  if (
+    toolName === "bash"
+    || toolName === "process_read"
+    || toolName === "process_write"
+    || toolName === "process_kill"
+  ) {
+    ingestObservation(details.process, ingest);
   }
 }
 
-function textContent(value: unknown): string[] {
-  if (typeof value === "string") return [value];
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((part) => {
-    const candidate = object(part);
-    return candidate?.type === "text" && typeof candidate.text === "string"
-      ? [candidate.text]
-      : [];
-  });
-}
-
-function scanTextIds(text: string, ingest: (record: HistoricalProcessRecord) => void): void {
-  for (const match of text.matchAll(/\bp([1-9]\d*)\b/g)) {
-    const id = match[0];
-    if (processNumber(id) !== undefined) ingest({ id });
+/** Parse current and legacy notification detail arrays without inspecting content. */
+function ingestNotificationDetails(
+  value: unknown,
+  ingest: (record: HistoricalProcessRecord) => void,
+): void {
+  const details = object(value);
+  if (!Array.isArray(details?.processes)) return;
+  for (const itemValue of details.processes) {
+    const item = object(itemValue);
+    if (item === undefined) continue;
+    // Legacy notifications stored process metadata directly on each item.
+    ingestObservation(item, ingest);
+    // Current notifications put the complete process snapshot under status.
+    ingestObservation(item.status, ingest);
   }
 }
 
@@ -307,17 +322,14 @@ export function reconstructProcessPersistence(
       const data = object(entry.data);
       const reason = shutdownReason(data?.reason);
       const processes = data?.processes;
-      if (reason !== undefined && Array.isArray(processes)) {
+      if (Array.isArray(processes)) {
         for (const process of processes) {
           const parsed = object(process);
           const record = parsed === undefined ? undefined : observation(parsed);
           if (record === undefined) continue;
           ingest(record);
-          graceful.set(record.id, reason);
+          if (reason !== undefined) graceful.set(record.id, reason);
         }
-      } else {
-        // Even malformed/newer versions can still reserve recognizable IDs.
-        scanProcessObjects(processes, ingest);
       }
       continue;
     }
@@ -325,40 +337,18 @@ export function reconstructProcessPersistence(
     const message = object(entry.message);
     if (entryType === "message" && message?.role === "toolResult") {
       const toolName = string(message.toolName);
-      if (toolName !== undefined && RELEVANT_TOOL_NAMES.has(toolName)) {
-        scanProcessObjects(message.details, ingest);
-        for (const text of textContent(message.content)) scanTextIds(text, ingest);
-      }
-      continue;
-    }
-
-    if (entryType === "message" && message?.role === "assistant") {
-      const content = message.content;
-      if (Array.isArray(content)) {
-        for (const blockValue of content) {
-          const block = object(blockValue);
-          const toolName = string(block?.name);
-          if (
-            block?.type === "toolCall"
-            && toolName !== undefined
-            && RELEVANT_TOOL_NAMES.has(toolName)
-          ) {
-            scanProcessObjects(block.arguments, ingest);
-          }
-        }
+      if (toolName !== undefined) {
+        ingestToolDetails(toolName, message.details, ingest);
       }
       continue;
     }
 
     const messageCustomType = string(message?.customType) ?? customType;
     if (
-      messageCustomType === "pibg-process-events"
-      || customType === "pibg-process-events"
+      messageCustomType === PROCESS_NOTIFICATION_MESSAGE_TYPE
+      || customType === PROCESS_NOTIFICATION_MESSAGE_TYPE
     ) {
-      scanProcessObjects(message?.details ?? entry.details, ingest);
-      for (const text of textContent(message?.content ?? entry.content)) {
-        scanTextIds(text, ingest);
-      }
+      ingestNotificationDetails(message?.details ?? entry.details, ingest);
     }
   }
 
@@ -384,9 +374,7 @@ export function reconstructProcessPersistence(
   return {
     historical,
     maxProcessNumber,
-    nextProcessNumber: maxProcessNumber === Number.MAX_SAFE_INTEGER
-      ? Number.MAX_SAFE_INTEGER
-      : maxProcessNumber + 1,
+    nextProcessNumber: maxProcessNumber + 1,
   };
 }
 

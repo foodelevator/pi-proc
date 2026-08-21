@@ -2,6 +2,7 @@ import { rmSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { PROCESS_NOTIFICATION_MESSAGE_TYPE } from "../background-processes/notification-scheduler";
 import {
   createRuntimeEndingEntryData,
   PROCESS_RUNTIME_END_ENTRY_TYPE,
@@ -13,11 +14,17 @@ import type { ManagedProcessRecord } from "../background-processes/types";
 function toolResult(toolName: string, details: unknown, content = ""): unknown {
   return {
     type: "message",
+    id: "entry0001",
+    parentId: null,
+    timestamp: "2026-08-21T00:00:00.000Z",
     message: {
       role: "toolResult",
+      toolCallId: "call_1",
       toolName,
       details,
       content: [{ type: "text", text: content }],
+      isError: false,
+      timestamp: 1_787_270_400_000,
     },
   };
 }
@@ -60,7 +67,7 @@ describe("process session persistence reconstruction", () => {
         type: "message",
         message: {
           role: "custom",
-          customType: "pibg-process-events",
+          customType: PROCESS_NOTIFICATION_MESSAGE_TYPE,
           content: "process p2 update",
           details: {
             processes: [{
@@ -160,11 +167,100 @@ describe("process session persistence reconstruction", () => {
     );
   });
 
-  it("treats observations without an ending entry as an unknown crash", () => {
+  it("never fabricates IDs from command output, filenames, metrics, or unsafe numbers", () => {
     const recovery = reconstructProcessPersistence([
       toolResult(
         "bash",
         undefined,
+        "latency p50=1ms p95=9ms p99=20ms; artifacts: p1.py p2.py; pod/api-p7",
+      ),
+      toolResult("bash", {
+        process: {
+          kind: "started",
+          id: "p3",
+          command: "python p1.py --percentiles p50,p95,p99",
+          cwd: "/work",
+          mode: "monitor",
+          pid: 303,
+          startedAt: 300,
+        },
+      }, "output includes changelist p4 and p9007199254740991"),
+      toolResult("process_list", {
+        processes: [{
+          id: "p4",
+          state: "completed",
+          command: "python p1.py",
+          mode: "background",
+          pid: 304,
+          startedAt: 301,
+          completedAt: 302,
+          exitCode: 0,
+          output: { totalBytes: 0, totalLines: 0, spilled: false },
+        }],
+      }),
+      toolResult("process_read", {
+        process: {
+          id: "p9007199254740991",
+          state: "completed",
+          command: "unsafe",
+        },
+      }),
+      {
+        type: "message",
+        message: {
+          role: "custom",
+          customType: PROCESS_NOTIFICATION_MESSAGE_TYPE,
+          content:
+            "latency p50/p95/p99; files p1.py p2.py; process-looking p800",
+          details: {
+            processes: [{
+              id: "p5",
+              events: ["completed"],
+              status: {
+                id: "p5",
+                state: "completed",
+                command: "printf done",
+                cwd: "/work",
+                mode: "background",
+                pid: 305,
+                startedAt: 303,
+                completedAt: 304,
+                exitCode: 0,
+                output: { totalBytes: 4, totalLines: 1, spilled: false },
+              },
+            }],
+          },
+        },
+      },
+    ]);
+
+    expect(recovery).toMatchObject({
+      maxProcessNumber: 5,
+      nextProcessNumber: 6,
+      historical: [
+        { id: "p3", command: "python p1.py --percentiles p50,p95,p99" },
+        { id: "p4", command: "python p1.py", priorState: "completed" },
+        { id: "p5", command: "printf done", priorState: "completed" },
+      ],
+    });
+    expect(recovery.historical.map(({ id }) => id)).toEqual(["p3", "p4", "p5"]);
+  });
+
+  it("treats genuine typed detail observations without an ending entry as an unknown crash", () => {
+    const recovery = reconstructProcessPersistence([
+      toolResult(
+        "bash",
+        {
+          process: {
+            kind: "started",
+            id: "p19",
+            command: "sleep 30",
+            cwd: "/work",
+            mode: "background",
+            pid: 42,
+            startedAt: 100,
+          },
+        },
         "Started background process `p19` (PID 42).",
       ),
       toolResult("process_read", {
@@ -176,20 +272,9 @@ describe("process session persistence reconstruction", () => {
           exitCode: 3,
         },
       }),
-      {
-        type: "message",
-        message: {
-          role: "assistant",
-          content: [{
-            type: "toolCall",
-            name: "process_kill",
-            arguments: { id: "p23" },
-          }],
-        },
-      },
     ]);
 
-    expect(recovery.nextProcessNumber).toBe(24);
+    expect(recovery.nextProcessNumber).toBe(20);
     expect(recovery.historical).toMatchObject([
       {
         id: "p4",
@@ -198,10 +283,8 @@ describe("process session persistence reconstruction", () => {
       },
       {
         id: "p19",
-        runtimeEnd: "unknown",
-      },
-      {
-        id: "p23",
+        command: "sleep 30",
+        mode: "background",
         runtimeEnd: "unknown",
       },
     ]);
@@ -209,10 +292,9 @@ describe("process session persistence reconstruction", () => {
       "no graceful shutdown record",
     );
     expect(recovery.historical[1]?.message).toContain("ended unexpectedly");
-    expect(recovery.historical[2]?.message).toContain("ended unexpectedly");
   });
 
-  it("ignores malformed and unrelated entries while reserving valid nested IDs", () => {
+  it("ignores malformed and unrelated entries while reserving valid typed legacy IDs", () => {
     expect(() => reconstructProcessPersistence([
       null,
       "old line",
@@ -226,6 +308,7 @@ describe("process session persistence reconstruction", () => {
           processes: [null, { id: "p0" }, { id: "p3", command: 8 }],
         },
       },
+      { type: "message", message: { role: "toolResult", toolName: "bash", details: { process: { id: "p9007199254740991" } } } },
       { type: "message", message: { role: "toolResult", toolName: "bash", details: { process: { id: "p9007199254740992" } } } },
     ])).not.toThrow();
 
