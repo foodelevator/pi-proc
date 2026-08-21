@@ -20,6 +20,7 @@ import { registerProcessKillTool } from "./tools/process-kill";
 import { registerProcessListTool } from "./tools/process-list";
 import { registerProcessReadTool } from "./tools/process-read";
 import { registerProcessWriteTool } from "./tools/process-write";
+import { SteeringDetachmentCoordinator } from "./steering-detachment";
 import {
   installRunningProcessesWidget,
   type RunningProcessesWidgetController,
@@ -255,27 +256,46 @@ export function createBackgroundProcessesExtension(
     let notifications: ProcessNotificationScheduler | undefined;
     let runningProcessesWidget: RunningProcessesWidgetController | undefined;
     let runtimeId: string | undefined;
+    const steeringDetachment = new SteeringDetachmentCoordinator();
 
     registerProcessNotificationRenderer(pi);
 
     const toolOptions = { getManager: () => manager };
-    registerBashTool(pi, toolOptions);
+    registerBashTool(pi, {
+      ...toolOptions,
+      consumeSteeringDetachment: (toolCallId) =>
+        steeringDetachment.consume(toolCallId),
+    });
     registerProcessReadTool(pi, toolOptions);
     registerProcessWriteTool(pi, toolOptions);
     registerProcessKillTool(pi, toolOptions);
     registerProcessListTool(pi, toolOptions);
+
+    pi.on("turn_start", () => {
+      steeringDetachment.beginTurn();
+    });
+
+    pi.on("tool_execution_start", (event) => {
+      steeringDetachment.toolStarted(event.toolCallId, event.toolName);
+    });
+
+    pi.on("tool_execution_end", (event) => {
+      steeringDetachment.toolEnded(event.toolCallId);
+    });
 
     pi.on("input", (event) => {
       if (
         event.streamingBehavior === "steer"
         && (event.source === "interactive" || event.source === "rpc")
       ) {
+        steeringDetachment.steer();
         manager?.detachAllForeground();
       }
       return { action: "continue" };
     });
 
     pi.on("turn_end", () => {
+      steeringDetachment.endTurn();
       notifications?.handleTurnEnd();
     });
 
@@ -284,6 +304,7 @@ export function createBackgroundProcessesExtension(
     });
 
     pi.on("session_start", async (_event, ctx) => {
+      steeringDetachment.reset();
       const previous = manager;
       const previousNotifications = notifications;
       const previousWidget = runningProcessesWidget;
@@ -328,6 +349,7 @@ export function createBackgroundProcessesExtension(
     });
 
     pi.on("session_shutdown", async (event, ctx) => {
+      steeringDetachment.reset();
       const current = manager;
       const currentNotifications = notifications;
       const currentWidget = runningProcessesWidget;

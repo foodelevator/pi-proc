@@ -65,6 +65,11 @@ export interface BackgroundBashToolDetails extends BashToolDetails {
 
 export interface BashToolOptions {
   getManager: () => ProcessManager | undefined;
+  /**
+   * Consume a turn-scoped steer that arrived before this wait finished
+   * spawning. Active waits are detached directly by the input handler.
+   */
+  consumeSteeringDetachment?: (toolCallId: string) => boolean;
   /** Test seam; production matches Pi's 100 ms update throttle. */
   updateThrottleMs?: number;
 }
@@ -240,7 +245,7 @@ export function createBashTool(
   return {
     name: "bash",
     label: "bash",
-    description: `Execute a bash command in the current working directory. Mode defaults to wait. Wait returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first), and streams updates. If the user sends a sterring message while running, every active wait is converted to a managed background process and returns its output so far. Background and monitor start a retained managed process and return its process ID immediately; use process_read, process_write, process_kill, and process_list to manage it. Background processes automatically notify on completion; monitor processes also notify on stdout activity, including combined unread stderr in the same globally batched message. If wait output is truncated, full output is saved to a temp file. Optional timeouts apply in every mode. Shell-level &, nohup, and programs self-daemonization are not integrated: prefer to use mode instead.`,
+    description: `Execute a bash command in the current working directory. Mode defaults to wait. Wait returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first), and streams updates. If the user sends a steering message while a wait is running or pending in the current assistant turn, the wait is converted to a managed background process and returns its output so far. Background and monitor start a retained managed process and return its process ID immediately; use process_read, process_write, process_kill, and process_list to manage it. Background processes automatically notify on completion; monitor processes also notify on stdout activity, including combined unread stderr in the same globally batched message. If wait output is truncated, full output is saved to a temp file. Optional timeouts apply in every mode. Shell-level &, nohup, and programs self-daemonization are not integrated: prefer to use mode instead.`,
     promptSnippet:
       "Execute bash commands, optionally as managed background or monitor processes",
     promptGuidelines: [
@@ -251,7 +256,7 @@ export function createBashTool(
     renderCall: renderBashCall,
     renderResult: renderBashResult,
 
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
       const mode = params.mode ?? "wait";
       const timeoutMs = resolveTimeoutMs(params.timeout);
       if (signal?.aborted) throw new Error("Command aborted");
@@ -261,7 +266,7 @@ export function createBashTool(
         && ctx?.mode !== "rpc"
       ) {
         throw new Error(
-          `Bash mode \`${mode}\` is available only in TUI and RPC modes; Pi's current mode is \`${ctx?.mode}\`. Use mode \`wait\` instead.`,
+          `Bash mode \`${mode}\` is available only in TUI and RPC modes; current mode is \`${ctx?.mode}\`. Use mode \`wait\` instead.`,
         );
       }
 
@@ -338,6 +343,14 @@ export function createBashTool(
         execution = await manager.startForeground(params.command, {
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
         });
+        if (
+          options.consumeSteeringDetachment?.(toolCallId) === true
+          && manager.foregroundExecutions.includes(execution)
+        ) {
+          // Steering may have arrived while the model was still producing this
+          // tool call or while startForeground was spawning the process.
+          manager.promoteForeground(execution);
+        }
         unsubscribeOutput = manager.subscribeOutput(
           execution,
           scheduleOutputUpdate,

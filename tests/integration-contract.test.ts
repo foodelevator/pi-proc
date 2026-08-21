@@ -39,6 +39,7 @@ interface IntegrationHarness {
     delivery: unknown;
   }>;
   tools: Map<string, RuntimeTool>;
+  emit(name: string, event: Record<string, unknown>): Promise<void>;
   shutdown(): Promise<void>;
   start(): Promise<void>;
 }
@@ -104,6 +105,7 @@ function createHarness(): IntegrationHarness {
     managers,
     messages,
     tools,
+    emit,
     async start() {
       await emit("session_start", {
         type: "session_start",
@@ -164,6 +166,105 @@ afterEach(async () => {
 });
 
 describe("cross-component managed-process contracts", () => {
+  it("detaches a wait whose command starts after steering, without leaking into the next turn", async () => {
+    const harness = createHarness();
+    await harness.start();
+    const bash = requireTool(harness, "bash");
+
+    await harness.emit("turn_start", {
+      type: "turn_start",
+      turnIndex: 0,
+      timestamp: Date.now(),
+    });
+    await harness.emit("input", {
+      type: "input",
+      text: "stop waiting",
+      source: "rpc",
+      streamingBehavior: "steer",
+    });
+    await harness.emit("tool_execution_start", {
+      type: "tool_execution_start",
+      toolCallId: "pending-bash",
+      toolName: "bash",
+      args: { command: "printf pending; read value" },
+    });
+
+    const detached = await bash.execute(
+      "pending-bash",
+      { command: "printf pending; read value" },
+      undefined,
+      undefined,
+      harness.ctx,
+    );
+    expect(detached.details).toMatchObject({
+      process: {
+        id: "p1",
+        mode: "background",
+        reason: "detached_by_steering",
+      },
+    });
+    expect(harness.managers[0]?.foregroundExecutions).toEqual([]);
+
+    await harness.emit("tool_execution_end", {
+      type: "tool_execution_end",
+      toolCallId: "pending-bash",
+      toolName: "bash",
+      result: detached,
+      isError: false,
+    });
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 0,
+      timestamp: Date.now(),
+      message: {},
+      toolResults: [],
+    });
+
+    await harness.emit("turn_start", {
+      type: "turn_start",
+      turnIndex: 1,
+      timestamp: Date.now(),
+    });
+    await harness.emit("tool_execution_start", {
+      type: "tool_execution_start",
+      toolCallId: "next-bash",
+      toolName: "bash",
+      args: { command: "printf next; read value" },
+    });
+    const nextWait = bash.execute(
+      "next-bash",
+      { command: "printf next; read value" },
+      undefined,
+      undefined,
+      harness.ctx,
+    );
+    await waitUntil(() =>
+      harness.managers[0]?.foregroundExecutions[0]?.outputStore
+        .readRange(0).content === "next"
+    );
+    expect(harness.managers[0]?.records.map((record) => record.id)).toEqual([
+      "p1",
+    ]);
+
+    await harness.emit("input", {
+      type: "input",
+      text: "detach the active wait",
+      source: "rpc",
+      streamingBehavior: "steer",
+    });
+    const nextDetached = await nextWait;
+    expect(nextDetached.details).toMatchObject({
+      process: {
+        id: "p2",
+        reason: "detached_by_steering",
+      },
+    });
+
+    await Promise.all(harness.managers[0]?.activeRecords.map(async (record) => {
+      await harness.managers[0]?.signalProcessAndWait(record.id, "SIGKILL");
+    }) ?? []);
+  });
+
   it("steers every wait, writes manual newlines and EOF, then supports implicit and recovery reads", async () => {
     const harness = createHarness();
     await harness.start();

@@ -30,7 +30,7 @@ Use `pi install -l .` instead for project-local Pi settings. Run `pi remove .` (
 {"command":"npm test"}
 ```
 
-A steering message entered while one or more wait commands are running promotes every active wait to managed background mode, letting the agent process the message instantly.
+A steering message entered while one or more wait commands are running or pending in the current assistant turn promotes every affected wait to managed background mode, letting the agent process the message instantly. This also covers a command whose tool call is still being streamed and has not started yet.
 
 ### Background
 
