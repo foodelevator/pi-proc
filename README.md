@@ -4,16 +4,23 @@ A distributable [Pi](https://pi.dev) extension for managed background processes 
 
 `pibg` overrides `bash` without changing its default behavior. Normal calls still use `mode: "wait"`, stream combined stdout/stderr, and preserve Pi-style tail truncation and spill files. Detached modes return stable IDs (`p1`, `p2`, …) for later reads, writes, signals, and listing.
 
-## Load it
+## Install and load
 
-Install dependencies and load the package directly while developing:
+This package requires macOS or Linux, Node.js 22.19 or newer, and Pi. From a checkout, install the locked dependencies and try it for one run:
 
 ```sh
-npm install
+npm ci
 pi -e .
 ```
 
-The package entry point is declared in `package.json`, so it can also be installed or configured as a normal Pi package.
+To register the checkout as a normal user-level Pi package (the path remains the package source):
+
+```sh
+pi install .
+pi list
+```
+
+Use `pi install -l .` instead for project-local Pi settings. Run `pi remove .` (or `pi remove -l .`) to remove that local-path registration. The extension entry point is declared in `package.json`. After a `pibg` release is published to npm, its equivalent commands are `pi -e npm:pibg`, `pi install npm:pibg`, and `pi remove npm:pibg`.
 
 ## Usage
 
@@ -116,6 +123,7 @@ output
 
 ## Behavior and limits
 
+- Only macOS and Linux are supported. Process I/O uses pipes, not a PTY, so terminal-dependent or full-screen interactive programs are unsupported.
 - One global fixed 200 ms window batches events from all processes.
 - Every detached process reports completion; monitor processes additionally report stdout activity.
 - Busy-agent batches are retained and delivered once after the turn settles.
@@ -128,7 +136,10 @@ output
 ## Development
 
 ```sh
-npm run check
+npm test                 # automated tests
+npm run check            # lint, typecheck, and all tests
+npm pack --dry-run       # inspect the publishable package
+npm audit                # dependency vulnerability audit
 ```
 
-Automated coverage includes component width/invalidation checks, widget timer and disposal lifecycle, renderer collapse/expansion behavior, extension discovery, and real Pi TUI/RPC registration probes. Manual tmux testing is intentionally reserved for the dedicated manual-testing step.
+Automated coverage includes end-to-end process contracts, component width/invalidation checks, widget timer and disposal lifecycle, renderer collapse/expansion behavior, extension discovery, and real Pi TUI/RPC/print registration probes. Manual tmux testing is intentionally reserved for the dedicated manual-testing step.

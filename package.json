@@ -1,13 +1,18 @@
 {
   "name": "pibg",
   "version": "0.1.0",
-  "description": "Background process management extension for Pi",
+  "description": "Managed background processes, monitoring, and notifications for Pi on macOS and Linux",
   "type": "module",
   "license": "MIT",
+  "os": [
+    "darwin",
+    "linux"
+  ],
   "keywords": [
     "pi-package",
     "pi-extension",
-    "background-processes"
+    "background-processes",
+    "process-management"
   ],
   "files": [
     "background-processes",
