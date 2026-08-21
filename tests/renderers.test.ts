@@ -43,7 +43,7 @@ function output(content: string): OutputReadResult {
     totalLines: content.split("\n").length,
     returnedBytes: bytes,
     returnedLines: content.split("\n").length,
-    spillPath: "/tmp/pibg-spill.log",
+    spillPath: "/tmp/pi-proc-spill.log",
   };
 }
 
@@ -241,7 +241,7 @@ describe("process notification renderer", () => {
     expect(expandedText).toContain("requested [0,");
     expect(expandedText).toMatch(/omitted \[0,\s*12\)/);
     expect(expandedText).toContain("exit 7");
-    expect(expandedText).toContain("/tmp/pibg-spill.log");
+    expect(expandedText).toContain("/tmp/pi-proc-spill.log");
     expect(expandedText).toContain("secret-output");
     assertWidths(expandedLines, 42);
   });
@@ -654,7 +654,7 @@ describe("managed process tool renderers", () => {
       context({ command: "npm test", mode: "monitor" as const }),
     );
     expect(plain(expanded.render(50))).toContain("DO-NOT-DUMP");
-    expect(plain(expanded.render(50))).toContain("/tmp/pibg-spill.log");
+    expect(plain(expanded.render(50))).toContain("/tmp/pi-proc-spill.log");
     assertWidths(expanded.render(50), 50);
   });
 

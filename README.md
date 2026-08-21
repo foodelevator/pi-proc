@@ -1,8 +1,8 @@
-# pibg
+# pi-proc
 
 A distributable [Pi](https://pi.dev) extension for managed background processes on macOS and Linux.
 
-`pibg` overrides `bash` without changing its default behavior. Normal calls still use `mode: "wait"`, stream combined stdout/stderr, and preserve Pi-style tail truncation and spill files. Detached modes return stable IDs (`p1`, `p2`, …) for later reads, writes, signals, and listing.
+`pi-proc` overrides `bash` without changing its default behavior. Normal calls still use `mode: "wait"`, stream combined stdout/stderr, and preserve Pi-style tail truncation and spill files. Detached modes return stable IDs (`p1`, `p2`, …) for later reads, writes, signals, and listing.
 
 ## Install and load
 
@@ -20,7 +20,7 @@ pi install .
 pi list
 ```
 
-Use `pi install -l .` instead for project-local Pi settings. Run `pi remove .` (or `pi remove -l .`) to remove that local-path registration. The extension entry point is declared in `package.json`. If `pibg` release is published to npm, its equivalent commands are `pi -e npm:pibg`, `pi install npm:pibg`, and `pi remove npm:pibg`.
+Use `pi install -l .` instead for project-local Pi settings. Run `pi remove .` (or `pi remove -l .`) to remove that local-path registration. The extension entry point is declared in `package.json`. If `pi-proc` is published to npm, its equivalent commands are `pi -e npm:pi-proc`, `pi install npm:pi-proc`, and `pi remove npm:pi-proc`.
 
 ## Usage
 
@@ -101,7 +101,7 @@ The widget:
 - normalizes multi-line commands and ANSI-safely truncates every row to terminal width;
 - refreshes elapsed seconds once per second only while visible;
 - is removed, along with its timer and listeners, on shutdown, replacement, or reload;
-- uses the `pibg:running-processes` key so other extensions' widgets are preserved.
+- uses the `pi-proc:running-processes` key so other extensions' widgets are preserved.
 
 Process notifications and tool rows are compact when collapsed. Use Pi's normal tool/message expansion action to show output, byte ranges, exit status, omitted ranges, spill paths, and full process-list details.
 

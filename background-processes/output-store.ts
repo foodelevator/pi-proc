@@ -149,7 +149,7 @@ export class OutputStore {
       "maxReadLines",
     );
     this.#tempDirectory = options.tempDirectory ?? tmpdir();
-    this.#tempFilePrefix = options.tempFilePrefix ?? "pibg-output";
+    this.#tempFilePrefix = options.tempFilePrefix ?? "pi-proc-output";
     this.#createSpillPath = options.createSpillPath;
   }
 

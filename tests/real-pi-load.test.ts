@@ -57,8 +57,8 @@ async function waitUntil(
 
 describe("real Pi runtime loading", () => {
   it("registers and disposes the namespaced widget through real Pi TUI bindings", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "pibg-real-widget-cwd-"));
-    const agentDir = mkdtempSync(join(tmpdir(), "pibg-real-widget-agent-"));
+    const cwd = mkdtempSync(join(tmpdir(), "pi-proc-real-widget-cwd-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-proc-real-widget-agent-"));
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir,
@@ -165,8 +165,8 @@ describe("real Pi runtime loading", () => {
   });
 
   it("loads and executes detached RPC mode through AgentSession tool precedence", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "pibg-real-load-cwd-"));
-    const agentDir = mkdtempSync(join(tmpdir(), "pibg-real-load-agent-"));
+    const cwd = mkdtempSync(join(tmpdir(), "pi-proc-real-load-cwd-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-proc-real-load-agent-"));
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir,
@@ -447,8 +447,8 @@ describe("real Pi runtime loading", () => {
   });
 
   it("releases a notification that expires in the real last-turn-to-settled gap", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "pibg-real-settled-cwd-"));
-    const agentDir = mkdtempSync(join(tmpdir(), "pibg-real-settled-agent-"));
+    const cwd = mkdtempSync(join(tmpdir(), "pi-proc-real-settled-cwd-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-proc-real-settled-agent-"));
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir,
@@ -554,8 +554,8 @@ describe("real Pi runtime loading", () => {
   });
 
   it("persists and reconstructs across real reload/new lifecycle events", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "pibg-real-lifecycle-cwd-"));
-    const agentDir = mkdtempSync(join(tmpdir(), "pibg-real-lifecycle-agent-"));
+    const cwd = mkdtempSync(join(tmpdir(), "pi-proc-real-lifecycle-cwd-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-proc-real-lifecycle-agent-"));
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir,
@@ -715,8 +715,8 @@ describe("real Pi runtime loading", () => {
   });
 
   it("restores resume-like persisted history in a real extension runtime", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "pibg-real-resume-cwd-"));
-    const agentDir = mkdtempSync(join(tmpdir(), "pibg-real-resume-agent-"));
+    const cwd = mkdtempSync(join(tmpdir(), "pi-proc-real-resume-cwd-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-proc-real-resume-agent-"));
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir,
@@ -802,8 +802,8 @@ describe("real Pi runtime loading", () => {
   });
 
   it("keeps a real print-mode session wait-only", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "pibg-real-print-cwd-"));
-    const agentDir = mkdtempSync(join(tmpdir(), "pibg-real-print-agent-"));
+    const cwd = mkdtempSync(join(tmpdir(), "pi-proc-real-print-cwd-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-proc-real-print-agent-"));
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir,

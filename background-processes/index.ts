@@ -193,7 +193,7 @@ function reportNotificationError(
     ctx.ui.notify(message, "error");
   } catch {
     try {
-      process.stderr.write(`[pibg] ${message}\n`);
+      process.stderr.write(`[pi-proc] ${message}\n`);
     } catch {
       // A stale UI and a closed stderr must not destabilize process cleanup.
     }

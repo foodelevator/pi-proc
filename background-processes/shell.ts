@@ -81,7 +81,7 @@ export interface SpawnShellOptions {
   /** Test seam; production callers should use Pi's getShellConfig resolution. */
   shellConfig?: ShellConfig;
   pipeIdleMs?: number;
-  /** Test/custom-runtime seam. Defaults to pibg's process-exit cleanup registry. */
+  /** Test/custom-runtime seam. Defaults to pi-proc's process-exit cleanup registry. */
   detachedProcessGroupTracker?: DetachedProcessGroupTracker;
   onStdoutActivity?: (chunk: Buffer) => void;
   onOutput?: (source: "stdout" | "stderr", chunk: Buffer) => void;
@@ -99,7 +99,7 @@ export interface SpawnedShellProcess {
 export class UnsupportedPlatformError extends Error {
   constructor(platform: NodeJS.Platform) {
     super(
-      `pibg supports only macOS and Linux; current platform is ${platform}`,
+      `pi-proc supports only macOS and Linux; current platform is ${platform}`,
     );
     this.name = "UnsupportedPlatformError";
   }

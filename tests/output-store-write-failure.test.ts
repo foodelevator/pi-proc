@@ -56,7 +56,7 @@ afterEach(() => {
 
 describe("OutputStore spill write failures", () => {
   it("keeps logical offsets aligned after a partial write followed by ENOSPC", () => {
-    const directory = mkdtempSync(join(tmpdir(), "pibg-write-failure-test-"));
+    const directory = mkdtempSync(join(tmpdir(), "pi-proc-write-failure-test-"));
     directories.push(directory);
     const path = join(directory, "output.log");
     const store = new OutputStore({

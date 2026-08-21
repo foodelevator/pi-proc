@@ -200,7 +200,7 @@ describe("auxiliary tool schemas and prompts", () => {
 
 describe("process_read", () => {
   it("returns a spilled implicit tail, advances the cursor, and explicitly recovers the prefix", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "pibg-read-tool-"));
+    const directory = mkdtempSync(join(tmpdir(), "pi-proc-read-tool-"));
     temporaryDirectories.push(directory);
     const manager = makeManager({
       outputStoreFactory: () => new OutputStore({
@@ -453,7 +453,7 @@ describe("process_kill", () => {
   });
 
   it("preserves later completion reporting when a signaled process survives the call", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "pibg-kill-survivor-"));
+    const directory = mkdtempSync(join(tmpdir(), "pi-proc-kill-survivor-"));
     temporaryDirectories.push(directory);
     const release = join(directory, "release");
     const manager = makeManager({ terminatingSignalWaitMs: 50 });

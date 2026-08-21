@@ -421,7 +421,7 @@ describe("stdin, signals, and shutdown", () => {
   });
 
   it("signals the entire process group and waits for a terminating signal", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "pibg-signal-test-"));
+    const directory = mkdtempSync(join(tmpdir(), "pi-proc-signal-test-"));
     temporaryDirectories.push(directory);
     const marker = join(directory, "child-terminated");
     const processes = manager({ terminatingSignalWaitMs: 2_000 });

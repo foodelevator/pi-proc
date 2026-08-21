@@ -17,7 +17,7 @@ const stores: TestStore[] = [];
 function makeStore(
   options: ConstructorParameters<typeof OutputStore>[0] = {},
 ): TestStore {
-  const directory = mkdtempSync(join(tmpdir(), "pibg-output-store-test-"));
+  const directory = mkdtempSync(join(tmpdir(), "pi-proc-output-store-test-"));
   const path = join(directory, "output.log");
   const store = new OutputStore({
     createSpillPath: () => path,

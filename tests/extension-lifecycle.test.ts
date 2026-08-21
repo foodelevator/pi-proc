@@ -136,7 +136,7 @@ describe("session-scoped ProcessManager lifecycle", () => {
       ) => Promise<{ content: unknown[]; details?: unknown }>;
     };
 
-    const directory = mkdtempSync(join(tmpdir(), "pibg-lifecycle-persist-"));
+    const directory = mkdtempSync(join(tmpdir(), "pi-proc-lifecycle-persist-"));
     temporaryDirectories.push(directory);
     const spillPath = join(directory, "retained.log");
     const entries: unknown[] = [];

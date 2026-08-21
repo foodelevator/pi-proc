@@ -373,7 +373,7 @@ describe("global process notification scheduling", () => {
 
   it("reports spill paths and every requested/returned/omitted byte range", () => {
     vi.useFakeTimers();
-    const directory = mkdtempSync(join(tmpdir(), "pibg-notification-spill-"));
+    const directory = mkdtempSync(join(tmpdir(), "pi-proc-notification-spill-"));
     const spillPath = join(directory, "combined.log");
     const value = harness();
     const record = fakeRecord("p1", "background");
@@ -510,7 +510,7 @@ describe("global process notification scheduling", () => {
 
 describe("process_kill notification suppression", () => {
   it("does not produce a delayed completion wake for a process killed by the tool path", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "pibg-notification-kill-"));
+    const directory = mkdtempSync(join(tmpdir(), "pi-proc-notification-kill-"));
     const manager = new ProcessManager({
       pipeIdleMs: 30,
       terminatingSignalWaitMs: 500,

@@ -8,7 +8,7 @@ import {
   type ProcessMode,
 } from "./types";
 
-export const PROCESS_RUNTIME_END_ENTRY_TYPE = "pibg-process-runtime-ending";
+export const PROCESS_RUNTIME_END_ENTRY_TYPE = "pi-proc-process-runtime-ending";
 export const PROCESS_RUNTIME_END_ENTRY_VERSION = 1;
 
 export type ProcessRuntimeShutdownReason = SessionShutdownEvent["reason"];

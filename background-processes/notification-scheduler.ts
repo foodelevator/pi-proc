@@ -19,7 +19,7 @@ import {
 } from "./tools/process-utils";
 import { renderProcessNotificationMessage } from "./ui";
 
-export const PROCESS_NOTIFICATION_MESSAGE_TYPE = "pibg-process-events";
+export const PROCESS_NOTIFICATION_MESSAGE_TYPE = "pi-proc-process-events";
 export const PROCESS_NOTIFICATION_WINDOW_MS = 200;
 
 export type ProcessNotificationEventType = "stdout" | "completed";

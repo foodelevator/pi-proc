@@ -49,7 +49,7 @@ import type {
   ProcessWriteToolInput,
 } from "./tools/process-write";
 
-export const RUNNING_PROCESSES_WIDGET_KEY = "pibg:running-processes";
+export const RUNNING_PROCESSES_WIDGET_KEY = "pi-proc:running-processes";
 const OUTPUT_PREVIEW_LINES = 5;
 const LIST_PREVIEW_RECORDS = 5;
 

@@ -411,7 +411,7 @@ export class ProcessManager {
     this.#baseEnvironment = options.baseEnvironment ?? process.env;
     this.#sessionEnvironment = options.sessionEnvironment ?? {};
     this.#outputStoreFactory = options.outputStoreFactory
-      ?? (() => new OutputStore({ tempFilePrefix: "pibg-process" }));
+      ?? (() => new OutputStore({ tempFilePrefix: "pi-proc-process" }));
     this.#pipeIdleMs = options.pipeIdleMs;
     this.#detachedProcessGroupTracker = options.detachedProcessGroupTracker;
     this.#terminatingSignalWaitMs = requireNonNegativeTimer(

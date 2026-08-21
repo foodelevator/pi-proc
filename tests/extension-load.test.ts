@@ -12,8 +12,8 @@ import { PROCESS_NOTIFICATION_MESSAGE_TYPE } from "../background-processes/notif
 
 describe("extension loading", () => {
   it("loads the package, creates a session manager, and executes the bash override", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "pibg-extension-cwd-"));
-    const agentDir = mkdtempSync(join(tmpdir(), "pibg-extension-agent-"));
+    const cwd = mkdtempSync(join(tmpdir(), "pi-proc-extension-cwd-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-proc-extension-agent-"));
     const sessionFile = join(cwd, "session.jsonl");
     const ctx = {
       cwd,
