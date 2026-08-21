@@ -240,11 +240,11 @@ export function createBashTool(
   return {
     name: "bash",
     label: "bash",
-    description: `Execute a bash command in the current working directory. Mode defaults to wait. Wait returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first), and streams updates. Interactive or RPC steering converts every active wait to a managed background process and returns its output so far without cancelling it. Background and monitor start a retained managed process and return its process ID immediately; use process_read, process_write, process_kill, and process_list to manage it. Background processes automatically notify on completion; monitor processes also notify on stdout activity, including combined unread stderr in the same globally batched message. Background and monitor require TUI or RPC mode; print and JSON remain wait-only. If wait output is truncated, full output is saved to a temp file. Optional timeouts apply in every mode. Shell-level &, nohup, and daemonization are unsupported; use mode instead.`,
+    description: `Execute a bash command in the current working directory. Mode defaults to wait. Wait returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first), and streams updates. If the user sends a sterring message while running, every active wait is converted to a managed background process and returns its output so far. Background and monitor start a retained managed process and return its process ID immediately; use process_read, process_write, process_kill, and process_list to manage it. Background processes automatically notify on completion; monitor processes also notify on stdout activity, including combined unread stderr in the same globally batched message. If wait output is truncated, full output is saved to a temp file. Optional timeouts apply in every mode. Shell-level &, nohup, and programs self-daemonization are not integrated: prefer to use mode instead.`,
     promptSnippet:
       "Execute bash commands, optionally as managed background or monitor processes",
     promptGuidelines: [
-      "You can inspect PI_* environment variables for current model and session details.",
+      "Inspect PI_* environment variables if you need current model and session details.",
       "Use bash mode background or monitor instead of shell-level &, nohup, or daemonization, then manage the returned ID with process_read, process_write, process_kill, and process_list.",
     ],
     parameters: bashSchema,
@@ -261,7 +261,7 @@ export function createBashTool(
         && ctx?.mode !== "rpc"
       ) {
         throw new Error(
-          `Bash mode \`${mode}\` is available only in TUI and RPC modes; current mode is \`${ctx?.mode}\`. Use mode \`wait\` instead.`,
+          `Bash mode \`${mode}\` is available only in TUI and RPC modes; Pi's current mode is \`${ctx?.mode}\`. Use mode \`wait\` instead.`,
         );
       }
 
