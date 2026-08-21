@@ -1,8 +1,11 @@
-import type {
-  AgentToolResult,
-  ExtensionContext,
-  Theme,
-  ToolRenderResultOptions,
+import {
+  type AgentToolResult,
+  type ExtensionContext,
+  formatSize,
+  keyHint,
+  type Theme,
+  type ToolRenderResultOptions,
+  truncateToVisualLines,
 } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
@@ -63,6 +66,18 @@ type LineBuilder = (width: number) => string[];
 interface RenderContext {
   lastComponent: Component | undefined;
   isError: boolean;
+}
+
+interface BashRenderState {
+  startedAt?: number;
+  endedAt?: number;
+  interval?: NodeJS.Timeout;
+}
+
+interface BashRenderContext extends RenderContext {
+  state: BashRenderState;
+  executionStarted: boolean;
+  invalidate(): void;
 }
 
 /** A cacheable component that computes theme styling at render time. */
@@ -136,9 +151,13 @@ export function createRunningProcessesWidget(
     const records = [...source.activeRecords].sort((left, right) =>
       processNumber(left.id) - processNumber(right.id)
     );
+    const idWidth = records.reduce(
+      (widest, record) => Math.max(widest, record.id.length),
+      0,
+    );
     return records.map((record) => {
       const dot = theme.fg("success", "●");
-      const id = theme.fg("accent", record.id);
+      const id = theme.fg("accent", record.id.padEnd(idWidth));
       const mode = theme.fg("muted", record.mode.padEnd(10));
       const elapsed = theme.fg(
         "dim",
@@ -258,14 +277,37 @@ function outputLines(
   expanded: boolean,
   theme: Theme,
 ): string[] {
-  const all = styledWrappedLines(text, width, (value) =>
-    theme.fg("toolOutput", value)
+  const cleaned = cleanDisplayText(text).trim();
+  if (cleaned.length === 0) return [];
+  const styled = cleaned.split("\n").map((line) =>
+    theme.fg("toolOutput", line)
+  ).join("\n");
+  if (expanded) return wrapTextWithAnsi(styled, width);
+
+  const preview = truncateToVisualLines(styled, OUTPUT_PREVIEW_LINES, width);
+  if (preview.skippedCount <= 0) return preview.visualLines;
+  const hint = theme.fg(
+    "muted",
+    `… (${preview.skippedCount} earlier lines,`,
+  ) + ` ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+  return [truncateToWidth(hint, width, "…"), ...preview.visualLines];
+}
+
+function formatDuration(milliseconds: number): string {
+  return `${(milliseconds / 1_000).toFixed(1)}s`;
+}
+
+function bashDurationLine(
+  options: ToolRenderResultOptions,
+  state: BashRenderState,
+  theme: Theme,
+): string | undefined {
+  if (state.startedAt === undefined) return undefined;
+  const end = state.endedAt ?? Date.now();
+  return theme.fg(
+    "muted",
+    `${options.isPartial ? "Elapsed" : "Took"} ${formatDuration(end - state.startedAt)}`,
   );
-  if (expanded || all.length <= OUTPUT_PREVIEW_LINES) return all;
-  return [
-    theme.fg("muted", `… ${all.length - OUTPUT_PREVIEW_LINES} earlier lines`),
-    ...all.slice(-OUTPUT_PREVIEW_LINES),
-  ];
 }
 
 function range(rangeValue: { start: number; end: number }): string {
@@ -386,8 +428,13 @@ export function renderProcessNotificationMessage(
 export function renderBashCall(
   args: BackgroundBashToolInput,
   theme: Theme,
-  context: RenderContext,
+  context: BashRenderContext,
 ): Component {
+  const state = context.state;
+  if (context.executionStarted && state.startedAt === undefined) {
+    state.startedAt = Date.now();
+    state.endedAt = undefined;
+  }
   return componentFor(context, (width) => {
     const command = typeof args.command === "string" && args.command.length > 0
       ? normalizeCommandLine(args.command)
@@ -407,12 +454,61 @@ export function renderBashCall(
   });
 }
 
+function bashDisplayOutput(
+  result: AgentToolResult<BackgroundBashToolDetails | undefined>,
+): string {
+  const truncation = result.details?.truncation;
+  const content = truncation?.truncated
+    && typeof truncation.content === "string"
+    ? truncation.content
+    : textContent(result);
+  return content.trim();
+}
+
+function bashWarning(
+  details: BackgroundBashToolDetails | undefined,
+  theme: Theme,
+): string | undefined {
+  const warnings: string[] = [];
+  if (details?.fullOutputPath !== undefined) {
+    warnings.push(`Full output: ${details.fullOutputPath}`);
+  }
+  const truncation = details?.truncation;
+  if (truncation?.truncated) {
+    if (truncation.truncatedBy === "lines") {
+      warnings.push(
+        `Truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines`,
+      );
+    } else {
+      warnings.push(
+        `Truncated: ${truncation.outputLines} lines shown (${formatSize(truncation.maxBytes)} limit)`,
+      );
+    }
+  }
+  return warnings.length === 0
+    ? undefined
+    : theme.fg("warning", `[${warnings.join(". ")}]`);
+}
+
 export function renderBashResult(
   result: AgentToolResult<BackgroundBashToolDetails | undefined>,
   options: ToolRenderResultOptions,
   theme: Theme,
-  context: RenderContext,
+  context: BashRenderContext,
 ): Component {
+  const state = context.state;
+  if (state.startedAt !== undefined && options.isPartial && state.interval === undefined) {
+    state.interval = setInterval(() => context.invalidate(), 1_000);
+    state.interval.unref?.();
+  }
+  if (!options.isPartial || context.isError) {
+    state.endedAt ??= Date.now();
+    if (state.interval !== undefined) {
+      clearInterval(state.interval);
+      state.interval = undefined;
+    }
+  }
+
   return componentFor(context, (width) => {
     const details = result.details;
     const descriptor = details?.process;
@@ -438,27 +534,26 @@ export function renderBashResult(
           lines.push(...outputLines(descriptorOutput.content, width, true, theme));
         }
       }
+      const duration = bashDurationLine(options, state, theme);
+      if (duration !== undefined) lines.push(duration);
       return lines;
     }
 
     const lines: string[] = [];
     if (options.isPartial) lines.push(theme.fg("warning", "running…"));
     else if (context.isError) lines.push(theme.fg("error", "error"));
-    const output = textContent(result);
-    lines.push(...outputLines(output, width, options.expanded, theme));
-    if (details?.truncation?.truncated) {
-      lines.push(theme.fg(
-        "warning",
-        `truncated: ${details.truncation.outputLines} of ${details.truncation.totalLines} lines`,
-      ));
+    lines.push(...outputLines(
+      bashDisplayOutput(result),
+      width,
+      options.expanded,
+      theme,
+    ));
+    const warning = bashWarning(details, theme);
+    if (warning !== undefined) {
+      lines.push(...wrapTextWithAnsi(warning, width));
     }
-    if (details?.fullOutputPath !== undefined) {
-      lines.push(...styledWrappedLines(
-        `full output ${details.fullOutputPath}`,
-        width,
-        (value) => theme.fg("dim", value),
-      ));
-    }
+    const duration = bashDurationLine(options, state, theme);
+    if (duration !== undefined) lines.push(duration);
     return lines;
   });
 }

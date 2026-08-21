@@ -1,11 +1,14 @@
-import type {
-  AgentToolResult,
-  ExtensionAPI,
-  Theme,
+import {
+  type AgentToolResult,
+  type ExtensionAPI,
+  initTheme,
+  type Theme,
+  ToolExecutionComponent,
+  truncateTail,
 } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   PROCESS_NOTIFICATION_MESSAGE_TYPE,
@@ -128,6 +131,18 @@ function context<T>(args: T): Omit<TestRenderContext, "args"> & { args: T } {
 function assertWidths(lines: string[], width: number): void {
   expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
 }
+
+function count(text: string, needle: string): number {
+  return text.split(needle).length - 1;
+}
+
+beforeAll(() => {
+  initTheme("dark");
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("process notification renderer", () => {
   it("keeps collapsed batches compact and reveals structured details only when expanded", () => {
@@ -269,6 +284,149 @@ describe("managed process tool renderers", () => {
     assertWidths(expanded.render(50), 50);
   });
 
+  it("uses footer-free truncated output, trims trailing newlines, and keeps familiar wait cues", () => {
+    if (bash.renderCall === undefined || bash.renderResult === undefined) {
+      throw new Error("Missing bash renderers");
+    }
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const args = { command: "printf lines" };
+    const renderState: Record<string, unknown> = {};
+    bash.renderCall(args, testTheme(), {
+      ...context(args),
+      state: renderState,
+    });
+    vi.setSystemTime(3_500);
+    const truncation = truncateTail(
+      Array.from({ length: 12 }, (_, index) => `line-${index + 1}`).join("\n") + "\n",
+      { maxLines: 7, maxBytes: 1_000 },
+    );
+    const spillPath = "/tmp/footer-free.log";
+    const modelText = `${truncation.content}\n\n[Showing lines 6-12 of 12. Full output: ${spillPath}]`;
+    const rendered = bash.renderResult(
+      {
+        content: [{ type: "text", text: modelText }],
+        details: { truncation, fullOutputPath: spillPath },
+      },
+      { expanded: false, isPartial: false },
+      testTheme(),
+      { ...context(args), state: renderState },
+    );
+    const renderedText = plain(rendered.render(100));
+
+    expect(renderedText).toContain("line-12");
+    expect(renderedText).not.toContain("[Showing lines");
+    expect(renderedText).toContain("to expand");
+    expect(renderedText).toContain("Took 2.5s");
+    expect(renderedText).toContain("Full output:");
+    expect(count(renderedText, "Full output:")).toBe(1);
+    expect(count(renderedText, spillPath)).toBe(1);
+    expect(renderedText.split("\n")).not.toContain("");
+  });
+
+  it("differentially retains built-in wait row cues through real ToolExecutionComponent", () => {
+    vi.useFakeTimers();
+    initTheme("dark");
+    const command = "for i in $(seq 1 20); do echo noise-line-$i; done";
+    const raw = Array.from(
+      { length: 20 },
+      (_, index) => `noise-line-${index + 1}`,
+    ).join("\n");
+    const truncation = truncateTail(raw, { maxLines: 8, maxBytes: 1_000 });
+    const spillPath = "/tmp/differential-bash.log";
+    const result = {
+      content: [{
+        type: "text",
+        text: `${truncation.content}\n\n[Showing lines 13-20 of 20. Full output: ${spillPath}]`,
+      }],
+      details: { truncation, fullOutputPath: spillPath },
+      isError: false,
+    };
+    const tui = { requestRender() {} } as TUI;
+    const customDefinition = createBashTool(unavailable);
+
+    for (const width of [40, 100]) {
+      const render = (definition: typeof customDefinition | undefined) => {
+        vi.setSystemTime(1_000);
+        const row = new ToolExecutionComponent(
+          "bash",
+          `call-${width}`,
+          { command },
+          {},
+          definition,
+          tui,
+          process.cwd(),
+        );
+        row.markExecutionStarted();
+        row.setArgsComplete();
+        vi.setSystemTime(3_000);
+        row.updateResult(result);
+        const lines = row.render(width);
+        assertWidths(lines, width);
+        return plain(lines);
+      };
+      const ours = render(customDefinition);
+      const builtIn = render(undefined);
+
+      for (const cue of ["noise-line-20", "to expand", "Full output:", "Truncated:", "Took 2.0s"]) {
+        expect(ours.includes(cue), `ours ${width}: ${cue}`).toBe(
+          builtIn.includes(cue),
+        );
+        expect(builtIn, `built-in ${width}: ${cue}`).toContain(cue);
+      }
+      expect(ours).not.toContain("[Showing lines");
+      expect(count(ours, "Full output:")).toBe(1);
+    }
+  });
+
+  it("renders familiar pending, failed, and small wait rows", () => {
+    if (bash.renderCall === undefined || bash.renderResult === undefined) {
+      throw new Error("Missing bash renderers");
+    }
+    vi.useFakeTimers();
+    const args = { command: "printf ok" };
+    const state: Record<string, unknown> = {};
+    vi.setSystemTime(1_000);
+    bash.renderCall(args, testTheme(), { ...context(args), state });
+
+    vi.setSystemTime(2_250);
+    const pending = bash.renderResult(
+      { content: [{ type: "text", text: "working\n" }], details: undefined },
+      { expanded: false, isPartial: true },
+      testTheme(),
+      { ...context(args), state, isPartial: true },
+    );
+    expect(plain(pending.render(80))).toContain("Elapsed 1.3s");
+
+    vi.setSystemTime(3_000);
+    const failed = bash.renderResult(
+      { content: [{ type: "text", text: "failed\n" }], details: undefined },
+      { expanded: false, isPartial: false },
+      testTheme(),
+      { ...context(args), state, isError: true },
+    );
+    const failedText = plain(failed.render(80));
+    expect(failedText).toContain("error");
+    expect(failedText).toContain("failed");
+    expect(failedText).toContain("Took 2.0s");
+    expect(failedText.split("\n")).not.toContain("");
+
+    const smallState: Record<string, unknown> = {};
+    vi.setSystemTime(4_000);
+    bash.renderCall(args, testTheme(), { ...context(args), state: smallState });
+    vi.setSystemTime(4_500);
+    const small = bash.renderResult(
+      { content: [{ type: "text", text: "ok\n" }], details: undefined },
+      { expanded: false, isPartial: false },
+      testTheme(),
+      { ...context(args), state: smallState },
+    );
+    const smallText = plain(small.render(80));
+    expect(smallText).toContain("ok");
+    expect(smallText).toContain("Took 0.5s");
+    expect(smallText.split("\n")).not.toContain("");
+  });
+
   it("preserves partial/error/expanded/truncation cues at narrow widths", () => {
     if (bash.renderResult === undefined) throw new Error("Missing bash renderer");
     const result = {
@@ -300,7 +458,7 @@ describe("managed process tool renderers", () => {
     const partialText = plain(partial.render(24));
     expect(partialText).toContain("running");
     expect(partialText).toContain("earlier");
-    expect(partialText).toContain("truncated");
+    expect(partialText).toContain("Truncated");
     assertWidths(partial.render(24), 24);
 
     const errorContext = {

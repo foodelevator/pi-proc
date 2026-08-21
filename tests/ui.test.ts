@@ -126,6 +126,25 @@ describe("running process widget", () => {
     expect(lines.every((line) => visibleWidth(line) <= 34)).toBe(true);
   });
 
+  it("keeps mode columns aligned when process IDs reach two digits", () => {
+    const source = new FakeProcessSource();
+    source.records = [
+      record("p1", { command: "first" }),
+      record("p10", { command: "tenth" }),
+    ];
+    const widget = createRunningProcessesWidget(source, testTheme(), {
+      now: () => 2_000,
+    });
+    const lines = widget.render(80).map((line) =>
+      line.replace(/\u001b\[[0-9;]*m/g, "")
+    );
+
+    expect(lines).toHaveLength(2);
+    expect(lines[0]?.indexOf("monitor")).toBe(lines[1]?.indexOf("monitor"));
+    expect(lines[0]).toMatch(/^● p1\s{3}monitor/);
+    expect(lines[1]).toMatch(/^● p10\s{2}monitor/);
+  });
+
   it("installs only while active, ticks once per second, and disposes every resource", () => {
     vi.useFakeTimers();
     const source = new FakeProcessSource();
