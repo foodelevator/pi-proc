@@ -20,7 +20,7 @@ pi install .
 pi list
 ```
 
-Use `pi install -l .` instead for project-local Pi settings. Run `pi remove .` (or `pi remove -l .`) to remove that local-path registration. The extension entry point is declared in `package.json`. After a `pibg` release is published to npm, its equivalent commands are `pi -e npm:pibg`, `pi install npm:pibg`, and `pi remove npm:pibg`.
+Use `pi install -l .` instead for project-local Pi settings. Run `pi remove .` (or `pi remove -l .`) to remove that local-path registration. The extension entry point is declared in `package.json`. If `pibg` release is published to npm, its equivalent commands are `pi -e npm:pibg`, `pi install npm:pibg`, and `pi remove npm:pibg`.
 
 ## Usage
 
@@ -30,7 +30,7 @@ Use `pi install -l .` instead for project-local Pi settings. Run `pi remove .` (
 {"command":"npm test"}
 ```
 
-A steering message entered while one or more wait commands are running promotes every active wait to managed background mode instead of cancelling it.
+A steering message entered while one or more wait commands are running promotes every active wait to managed background mode, letting the agent process the message instantly.
 
 ### Background
 
@@ -48,7 +48,7 @@ Returns immediately with a process descriptor such as `p1`. Background processes
 
 Monitor mode also batches stdout activity into process notifications. Any unread stderr is included when stdout or completion triggers a batch.
 
-Detached modes are available in TUI and RPC sessions. Print and JSON sessions intentionally remain wait-only.
+Detached modes are available in TUI and RPC sessions. In Print and JSON sessions, only wait mode is allowed.
 
 ### Manage a detached process
 
