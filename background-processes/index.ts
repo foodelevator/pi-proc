@@ -5,6 +5,10 @@ import type {
 
 import { ProcessManager } from "./process-manager";
 import { registerBashTool } from "./tools/bash";
+import { registerProcessKillTool } from "./tools/process-kill";
+import { registerProcessListTool } from "./tools/process-list";
+import { registerProcessReadTool } from "./tools/process-read";
+import { registerProcessWriteTool } from "./tools/process-write";
 
 export { OutputStore } from "./output-store";
 export {
@@ -24,6 +28,7 @@ export type {
   ProcessManagerEventListener,
   ProcessManagerOptions,
   ProcessOutputListener,
+  SignalProcessAndWaitOptions,
   ProcessStateFailure,
 } from "./process-manager";
 export {
@@ -54,6 +59,48 @@ export type {
   BashProcessDescriptor,
   BashToolOptions,
 } from "./tools/bash";
+export {
+  createProcessKillTool,
+  platformSignalNames,
+  processKillSchema,
+  registerProcessKillTool,
+} from "./tools/process-kill";
+export type {
+  ProcessKillToolDetails,
+  ProcessKillToolInput,
+} from "./tools/process-kill";
+export {
+  createProcessListTool,
+  processListSchema,
+  registerProcessListTool,
+} from "./tools/process-list";
+export type {
+  ProcessListToolDetails,
+  ProcessListToolInput,
+} from "./tools/process-list";
+export {
+  createProcessReadTool,
+  processReadSchema,
+  registerProcessReadTool,
+} from "./tools/process-read";
+export type {
+  ProcessReadToolDetails,
+  ProcessReadToolInput,
+} from "./tools/process-read";
+export {
+  createProcessWriteTool,
+  processWriteSchema,
+  registerProcessWriteTool,
+} from "./tools/process-write";
+export type {
+  ProcessWriteToolDetails,
+  ProcessWriteToolInput,
+} from "./tools/process-write";
+export type {
+  ManagedProcessOutputStatus,
+  ManagedProcessStatus,
+  ProcessToolOptions,
+} from "./tools/process-utils";
 export type {
   ByteRange,
   ForegroundExecution,
@@ -102,7 +149,7 @@ export interface BackgroundProcessesExtensionOptions {
   ) => ProcessManager;
 }
 
-/** Build the bash override with one manager per Pi session runtime. */
+/** Build the managed bash and process tools with one manager per Pi session runtime. */
 export function createBackgroundProcessesExtension(
   options: BackgroundProcessesExtensionOptions = {},
 ): (pi: ExtensionAPI) => void {
@@ -112,7 +159,12 @@ export function createBackgroundProcessesExtension(
   return (pi) => {
     let manager: ProcessManager | undefined;
 
-    registerBashTool(pi, { getManager: () => manager });
+    const toolOptions = { getManager: () => manager };
+    registerBashTool(pi, toolOptions);
+    registerProcessReadTool(pi, toolOptions);
+    registerProcessWriteTool(pi, toolOptions);
+    registerProcessKillTool(pi, toolOptions);
+    registerProcessListTool(pi, toolOptions);
 
     pi.on("input", (event) => {
       if (

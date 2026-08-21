@@ -133,6 +133,13 @@ export interface ProcessManagerCallbacks {
   onCallbackError?: (error: Error) => void;
 }
 
+export interface SignalProcessAndWaitOptions {
+  /** Consume unread output before releasing the operation. */
+  includeUnreadOutput?: boolean;
+  /** Drop completion reporting only if the target completes during this operation. */
+  suppressCompletionNotification?: boolean;
+}
+
 export interface ProcessManagerOptions extends ProcessManagerCallbacks {
   cwd?: string;
   platform?: NodeJS.Platform;
@@ -181,6 +188,7 @@ interface InternalProcess extends ProcessExecution {
   tracked: boolean;
   completionResult?: ProcessCompletion;
   completionNotified: boolean;
+  completionNotificationHolds: number;
 }
 
 function deferred<T>(): Deferred<T> {
@@ -690,24 +698,47 @@ export class ProcessManager {
   async signalProcessAndWait(
     id: string,
     signal = "SIGTERM",
+    options: SignalProcessAndWaitOptions = {},
   ): Promise<ProcessSignalResult> {
-    const record = this.getActiveProcess(id);
-    const normalized = normalizeSignal(signal);
-    const sent = this.signalExecution(record, normalized);
-    if (!isNormallyTerminatingSignal(normalized, this.#platform)) {
-      return { signal: normalized, sent, exited: false };
-    }
+    const record = this.getActiveProcess(id) as InternalProcess;
+    const suppressNotification = options.suppressCompletionNotification
+      ?? false;
+    if (suppressNotification) record.completionNotificationHolds++;
 
-    const completion = await this.waitForCompletion(
-      record,
-      this.#terminatingSignalWaitMs,
-    );
-    return {
-      signal: normalized,
-      sent,
-      exited: completion !== undefined,
-      ...(completion === undefined ? {} : { completion }),
-    };
+    try {
+      const normalized = normalizeSignal(signal);
+      const sent = this.signalExecution(record, normalized);
+      let completion: ProcessCompletion | undefined;
+      if (isNormallyTerminatingSignal(normalized, this.#platform)) {
+        completion = await this.waitForCompletion(
+          record,
+          this.#terminatingSignalWaitMs,
+        );
+      }
+
+      // Catch a completion that won the timeout boundary before this synchronous
+      // snapshot. If the process is still alive, releasing the hold below leaves
+      // its eventual completion reporting intact.
+      completion ??= record.completionResult;
+      const output = options.includeUnreadOutput
+        ? record.outputStore.readImplicit()
+        : undefined;
+      if (suppressNotification && completion !== undefined) {
+        record.completionNotified = true;
+      }
+      return {
+        signal: normalized,
+        sent,
+        exited: completion !== undefined,
+        ...(completion === undefined ? {} : { completion }),
+        ...(output === undefined ? {} : { output }),
+      };
+    } finally {
+      if (suppressNotification) {
+        record.completionNotificationHolds--;
+        this.#notifyCompletion(record);
+      }
+    }
   }
 
   async waitForCompletion(
@@ -842,6 +873,7 @@ export class ProcessManager {
       stdinQueue: Promise.resolve(),
       tracked: false,
       completionNotified: false,
+      completionNotificationHolds: 0,
     };
     processHolder.current = internal;
     this.#owned.add(internal);
@@ -975,6 +1007,7 @@ export class ProcessManager {
     if (
       !internal.tracked
       || internal.completionNotified
+      || internal.completionNotificationHolds > 0
       || internal.completionResult === undefined
     ) {
       return;

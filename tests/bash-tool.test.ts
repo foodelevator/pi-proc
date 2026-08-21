@@ -88,16 +88,17 @@ describe("bash override schema", () => {
     expect(modeDescription).toBeTypeOf("string");
     if (typeof modeDescription === "string") {
       expect(modeDescription).toContain("return a managed process ID immediately");
-      expect(modeDescription).toContain(
-        "output and completion reporting are not yet available",
-      );
+      expect(modeDescription).toContain("process_read");
+      expect(modeDescription).toContain("process_kill");
     }
 
     const description = createBashTool({ getManager: () => undefined }).description;
     expect(description).toContain(
-      "does not yet expose process reporting or management tools",
+      "use process_read, process_write, process_kill, and process_list",
     );
-    expect(description).not.toContain("reports completion later");
+    expect(description).toContain(
+      "automatic output/completion notifications are not implemented yet",
+    );
   });
 });
 

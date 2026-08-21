@@ -29,10 +29,12 @@ describe("session-scoped ProcessManager lifecycle", () => {
     ) => void | Promise<void>;
 
     let bash: BashTool | undefined;
+    const registeredTools: string[] = [];
     const handlers = new Map<string, SessionHandler[]>();
     const pi = {
       registerTool(tool: BashTool) {
-        bash = tool;
+        registeredTools.push(tool.name);
+        if (tool.name === "bash") bash = tool;
       },
       on(event: string, handler: SessionHandler) {
         const registered = handlers.get(event) ?? [];
@@ -61,6 +63,13 @@ describe("session-scoped ProcessManager lifecycle", () => {
     if (start === undefined || shutdown === undefined || bash === undefined) {
       throw new Error("Extension lifecycle registration is incomplete");
     }
+    expect(registeredTools).toEqual([
+      "bash",
+      "process_read",
+      "process_write",
+      "process_kill",
+      "process_list",
+    ]);
 
     await start({ type: "session_start", reason: "startup" }, ctx);
     const oldManager = managers[0];

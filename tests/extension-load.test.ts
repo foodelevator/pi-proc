@@ -37,6 +37,13 @@ describe("extension loading", () => {
       expect(result.extensions).toHaveLength(1);
       extension = result.extensions[0];
       const bash = extension?.tools.get("bash")?.definition;
+      expect([...(extension?.tools.keys() ?? [])]).toEqual([
+        "bash",
+        "process_read",
+        "process_write",
+        "process_kill",
+        "process_list",
+      ]);
       expect(bash).toBeDefined();
       expect(bash?.parameters).toMatchObject({
         required: ["command"],
@@ -44,6 +51,11 @@ describe("extension loading", () => {
           mode: { enum: ["wait", "background", "monitor"] },
         },
       });
+      expect(extension?.tools.get("process_kill")?.definition.parameters)
+        .toMatchObject({
+          required: ["id"],
+          properties: { signal: { type: "string" } },
+        });
       if (bash === undefined) throw new Error("bash override was not loaded");
 
       await expect(

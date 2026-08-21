@@ -152,6 +152,8 @@ export interface ProcessSignalResult {
   sent: boolean;
   exited: boolean;
   completion?: ProcessCompletion;
+  /** Present when the signal operation consumed the process's unread output. */
+  output?: OutputReadResult;
 }
 
 export interface ProcessShutdownSignalFailure {

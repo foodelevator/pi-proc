@@ -30,7 +30,7 @@ export const bashSchema = Type.Object({
   mode: Type.Optional(
     StringEnum(["wait", "background", "monitor"] as const, {
       description:
-        "Execution mode (default: wait). Background and monitor return a managed process ID immediately. Process output and completion reporting are not yet available.",
+        "Execution mode (default: wait). Background and monitor return a managed process ID immediately for use with process_read, process_write, process_kill, and process_list.",
     }),
   ),
   timeout: Type.Optional(
@@ -239,10 +239,12 @@ export function createBashTool(
   return {
     name: "bash",
     label: "bash",
-    description: `Execute a bash command in the current working directory. Mode defaults to wait. Wait returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first), and streams updates. Interactive or RPC steering converts every active wait to a managed background process and returns its output so far without cancelling it. Background and monitor start a managed process and return its process ID immediately; monitor is reserved for future stdout-triggered reporting. This release retains detached output and completion internally but does not yet expose process reporting or management tools. Background and monitor require TUI or RPC mode. If wait output is truncated, full output is saved to a temp file. Optional timeouts apply in every mode. Shell-level &, nohup, and daemonization are unsupported; use mode instead.`,
-    promptSnippet: "Execute bash commands (ls, grep, find, etc.)",
+    description: `Execute a bash command in the current working directory. Mode defaults to wait. Wait returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first), and streams updates. Interactive or RPC steering converts every active wait to a managed background process and returns its output so far without cancelling it. Background and monitor start a retained managed process and return its process ID immediately; use process_read, process_write, process_kill, and process_list to manage it. User-facing automatic output/completion notifications are not implemented yet, so read or list processes explicitly. Background and monitor require TUI or RPC mode; print and JSON remain wait-only. If wait output is truncated, full output is saved to a temp file. Optional timeouts apply in every mode. Shell-level &, nohup, and daemonization are unsupported; use mode instead.`,
+    promptSnippet:
+      "Execute bash commands, optionally as managed background or monitor processes",
     promptGuidelines: [
       "You can inspect PI_* environment variables for current model and session details.",
+      "Use bash mode background or monitor instead of shell-level &, nohup, or daemonization, then manage the returned ID with process_read, process_write, process_kill, and process_list.",
     ],
     parameters: bashSchema,
 
