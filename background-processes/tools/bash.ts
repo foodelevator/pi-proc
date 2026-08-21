@@ -29,7 +29,7 @@ export const bashSchema = Type.Object({
   mode: Type.Optional(
     StringEnum(["wait", "background", "monitor"] as const, {
       description:
-        "Execution mode (default: wait). Background returns immediately and reports completion later; monitor also reports stdout activity.",
+        "Execution mode (default: wait). Background and monitor return a managed process ID immediately. Process output and completion reporting are not yet available.",
     }),
   ),
   timeout: Type.Optional(
@@ -62,9 +62,6 @@ export interface BashToolOptions {
   /** Test seam; production matches Pi's 100 ms update throttle. */
   updateThrottleMs?: number;
 }
-
-/** @deprecated Use BashToolOptions. */
-export type WaitBashToolOptions = BashToolOptions;
 
 interface BashOutputSnapshot {
   content: string;
@@ -195,7 +192,7 @@ export function createBashTool(
   return {
     name: "bash",
     label: "bash",
-    description: `Execute a bash command in the current working directory. Mode defaults to wait. Wait returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first), and streams updates. Background starts a managed process and returns its process ID immediately; monitor additionally reports later stdout activity. Background and monitor require TUI or RPC mode. If wait output is truncated, full output is saved to a temp file. Optional timeouts apply in every mode. Shell-level &, nohup, and daemonization are unsupported; use mode instead.`,
+    description: `Execute a bash command in the current working directory. Mode defaults to wait. Wait returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first), and streams updates. Background and monitor start a managed process and return its process ID immediately; monitor is reserved for future stdout-triggered reporting. This release retains detached output and completion internally but does not yet expose process reporting or management tools. Background and monitor require TUI or RPC mode. If wait output is truncated, full output is saved to a temp file. Optional timeouts apply in every mode. Shell-level &, nohup, and daemonization are unsupported; use mode instead.`,
     promptSnippet: "Execute bash commands (ls, grep, find, etc.)",
     promptGuidelines: [
       "You can inspect PI_* environment variables for current model and session details.",
@@ -208,11 +205,11 @@ export function createBashTool(
       if (signal?.aborted) throw new Error("Command aborted");
       if (
         mode !== "wait"
-        && ctx.mode !== "tui"
-        && ctx.mode !== "rpc"
+        && ctx?.mode !== "tui"
+        && ctx?.mode !== "rpc"
       ) {
         throw new Error(
-          `Bash mode \`${mode}\` is available only in TUI and RPC modes; current mode is \`${ctx.mode}\`. Use mode \`wait\` instead.`,
+          `Bash mode \`${mode}\` is available only in TUI and RPC modes; current mode is \`${ctx?.mode}\`. Use mode \`wait\` instead.`,
         );
       }
 
@@ -342,8 +339,3 @@ export function registerBashTool(
 ): void {
   pi.registerTool(createBashTool(options));
 }
-
-/** @deprecated Use createBashTool. */
-export const createWaitBashTool = createBashTool;
-/** @deprecated Use registerBashTool. */
-export const registerWaitBashTool = registerBashTool;

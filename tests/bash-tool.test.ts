@@ -87,9 +87,17 @@ describe("bash override schema", () => {
     const modeDescription = modeSchema.description;
     expect(modeDescription).toBeTypeOf("string");
     if (typeof modeDescription === "string") {
-      expect(modeDescription).toContain("returns immediately");
-      expect(modeDescription).not.toContain("not implemented");
+      expect(modeDescription).toContain("return a managed process ID immediately");
+      expect(modeDescription).toContain(
+        "output and completion reporting are not yet available",
+      );
     }
+
+    const description = createBashTool({ getManager: () => undefined }).description;
+    expect(description).toContain(
+      "does not yet expose process reporting or management tools",
+    );
+    expect(description).not.toContain("reports completion later");
   });
 });
 
@@ -125,6 +133,59 @@ describe("managed bash execution", () => {
       await manager.getProcess("p1").completion;
     },
   );
+
+  it("returns while a background process remains active and independently writable", async () => {
+    const manager = makeManager();
+
+    const result = await execute(manager, {
+      command: "read line; printf 'received:%s' \"$line\"",
+      mode: "background",
+    });
+    const id = result.details?.process?.id;
+    if (id === undefined) throw new Error("Expected process ID");
+    const record = manager.getProcess(id);
+
+    expect(record.completedAt).toBeUndefined();
+    expect(manager.activeRecords).toContain(record);
+    expect(() => process.kill(-record.pid, 0)).not.toThrow();
+
+    await manager.writeProcess(id, "after-return\n", true);
+    await record.completion;
+    expect(record.outputStore.readRange(0).content).toBe(
+      "received:after-return",
+    );
+  });
+
+  it("emits monitor activity for stdout produced after the tool returns", async () => {
+    const manager = makeManager();
+    const events: string[] = [];
+    manager.subscribeEvents((event) => {
+      events.push(`${event.type}:${event.process.id}`);
+    });
+
+    const result = await execute(manager, {
+      command: "read line; printf 'late:%s' \"$line\"",
+      mode: "monitor",
+    });
+    const id = result.details?.process?.id;
+    if (id === undefined) throw new Error("Expected process ID");
+    const record = manager.getProcess(id);
+
+    expect(record.completedAt).toBeUndefined();
+    expect(events).toEqual([]);
+
+    await manager.writeProcess(id, "stdout-after-return\n", true);
+    await waitUntil(() => events.includes(`stdout-activity:${id}`));
+    await record.completion;
+
+    expect(events).toEqual([
+      `stdout-activity:${id}`,
+      `completed:${id}`,
+    ]);
+    expect(record.outputStore.readRange(0).content).toBe(
+      "late:stdout-after-return",
+    );
+  });
 
   it("returns a started descriptor for a fast exit and retains its completion", async () => {
     const manager = makeManager();
@@ -163,6 +224,21 @@ describe("managed bash execution", () => {
 
     const completion = await manager.getProcess("p1").completion;
     expect(completion).toMatchObject({ timedOut: true, exitSignal: "SIGKILL" });
+  });
+
+  it("rejects detached execution cleanly when called without an extension context", async () => {
+    const manager = makeManager();
+
+    await expect(toolFor(manager).execute(
+      "context-free-call",
+      { command: "true", mode: "background" },
+      undefined,
+      undefined,
+      undefined as unknown as ExtensionContext,
+    )).rejects.toThrow(
+      "available only in TUI and RPC modes; current mode is `undefined`",
+    );
+    expect(manager.records).toHaveLength(0);
   });
 
   it.each(["print", "json"] as const)(

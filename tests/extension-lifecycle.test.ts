@@ -10,7 +10,7 @@ import {
   createBackgroundProcessesExtension,
 } from "../background-processes/index";
 import { ProcessManager } from "../background-processes/process-manager";
-import type { createWaitBashTool } from "../background-processes/tools/bash";
+import type { createBashTool } from "../background-processes/tools/bash";
 
 const managers: ProcessManager[] = [];
 
@@ -22,7 +22,7 @@ afterEach(async () => {
 
 describe("session-scoped ProcessManager lifecycle", () => {
   it("installs the replacement manager even when old-manager shutdown rejects", async () => {
-    type BashTool = ReturnType<typeof createWaitBashTool>;
+    type BashTool = ReturnType<typeof createBashTool>;
     type SessionHandler = (
       event: SessionStartEvent | SessionShutdownEvent,
       ctx: ExtensionContext,

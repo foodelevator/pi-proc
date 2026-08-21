@@ -46,16 +46,13 @@ export {
   bashSchema,
   BASH_UPDATE_THROTTLE_MS,
   createBashTool,
-  createWaitBashTool,
   registerBashTool,
-  registerWaitBashTool,
 } from "./tools/bash";
 export type {
   BackgroundBashToolDetails,
   BackgroundBashToolInput,
   BashProcessDescriptor,
   BashToolOptions,
-  WaitBashToolOptions,
 } from "./tools/bash";
 export type {
   ByteRange,

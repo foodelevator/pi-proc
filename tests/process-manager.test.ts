@@ -151,9 +151,11 @@ describe("POSIX shell spawning", () => {
       onOutput: (_execution, source, chunk) => {
         outputEvents.push(`${source}:${chunk.toString()}`);
       },
-      onStdoutActivity: (_execution, chunk) => {
-        stdoutActivity.push(chunk.toString());
-      },
+    });
+    processes.subscribeEvents((event) => {
+      if (event.type === "stdout-activity") {
+        stdoutActivity.push(event.process.id);
+      }
     });
     const record = await processes.startManaged(
       "printf out-1; sleep 0.03; printf err-1 >&2; sleep 0.03; printf out-2; sleep 0.03; printf err-2 >&2",
@@ -168,17 +170,14 @@ describe("POSIX shell spawning", () => {
       "stdout:out-2",
       "stderr:err-2",
     ]);
-    expect(stdoutActivity).toEqual(["out-1", "out-2"]);
+    expect(stdoutActivity).toEqual([record.id, record.id]);
     expect(record.outputStore.readRange(0).content).toBe(
       "out-1err-1out-2err-2",
     );
   });
 
   it("emits clean managed events while keeping background and waits stdout-quiet", async () => {
-    const callbackActivity: string[] = [];
-    const processes = manager({
-      onStdoutActivity: (record) => callbackActivity.push(record.id),
-    });
+    const processes = manager();
     const events: string[] = [];
     processes.subscribeEvents((event) => {
       events.push(`${event.type}:${event.process.id}`);
@@ -201,7 +200,6 @@ describe("POSIX shell spawning", () => {
       foreground.completion,
     ]);
 
-    expect(callbackActivity).toEqual([monitor.id]);
     expect(events.filter((event) => event.startsWith("stdout-activity:"))).toEqual([
       `stdout-activity:${monitor.id}`,
     ]);
@@ -286,10 +284,9 @@ describe("ProcessManager lifecycle", () => {
 
   it("allocates public IDs after spawn and retains completed records and output", async () => {
     const completions: string[] = [];
-    const processes = manager({
-      onCompleted: (execution) => {
-        completions.push(execution.id ?? "private");
-      },
+    const processes = manager();
+    processes.subscribeEvents((event) => {
+      if (event.type === "completed") completions.push(event.process.id);
     });
 
     const first = await processes.startManaged("printf fast");
