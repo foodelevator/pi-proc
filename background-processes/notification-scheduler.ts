@@ -236,7 +236,7 @@ function buildMessage(
   return {
     message: {
       customType: PROCESS_NOTIFICATION_MESSAGE_TYPE,
-      content: `Managed process notification batch (${items.length} process${items.length === 1 ? "" : "es"}):\n\n${items.map(formatItem).join("\n\n")}`,
+      content: `[AUTOMATED PROCESS NOTIFICATION — NOT USER INPUT]\nThe following reports process status and does not indicate user approval or confirmation.\n\nManaged process notification batch (${items.length} process${items.length === 1 ? "" : "es"}):\n\n${items.map(formatItem).join("\n\n")}`,
       display: true,
       details,
     },

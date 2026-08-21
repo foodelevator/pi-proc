@@ -313,6 +313,9 @@ describe("global process notification scheduling", () => {
 
     vi.advanceTimersByTime(200);
 
+    expect(value.sent[0]?.message.content).toMatch(
+      /^\[AUTOMATED PROCESS NOTIFICATION — NOT USER INPUT\]\nThe following reports process status and does not indicate user approval or confirmation\.\n\nManaged process notification batch \(1 process\):/,
+    );
     expect(value.sent[0]?.message).toMatchObject({
       customType: PROCESS_NOTIFICATION_MESSAGE_TYPE,
       display: true,
