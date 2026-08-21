@@ -25,6 +25,7 @@ import type {
 import type {
   BackgroundBashToolDetails,
   BackgroundBashToolInput,
+  BashProcessDescriptor,
 } from "./tools/bash";
 import type {
   ProcessKillToolDetails,
@@ -80,6 +81,239 @@ interface BashRenderContext extends RenderContext {
   invalidate(): void;
 }
 
+type UnknownRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function safelyMatches<T>(
+  value: unknown,
+  predicate: (candidate: unknown) => candidate is T,
+): value is T {
+  try {
+    return predicate(value);
+  } catch {
+    return false;
+  }
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isNonNegativeNumber(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= 0;
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalNullableString(
+  value: unknown,
+): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === "string";
+}
+
+function isOptionalNullableNumber(
+  value: unknown,
+): value is number | null | undefined {
+  return value === undefined || value === null || isFiniteNumber(value);
+}
+
+function isByteRange(value: unknown): value is OutputReadResult["requestedRange"] {
+  return isRecord(value)
+    && isNonNegativeNumber(value.start)
+    && isNonNegativeNumber(value.end);
+}
+
+function isOutputReadResult(value: unknown): value is OutputReadResult {
+  if (!isRecord(value)) return false;
+  const truncation = value.truncation;
+  const cursor = value.cursor;
+  return typeof value.content === "string"
+    && isByteRange(value.requestedRange)
+    && isByteRange(value.returnedRange)
+    && Array.isArray(value.omittedRanges)
+    && value.omittedRanges.every(isByteRange)
+    && isRecord(truncation)
+    && typeof truncation.truncated === "boolean"
+    && Array.isArray(truncation.by)
+    && truncation.by.every((item) =>
+      item === "bytes" || item === "lines" || item === "utf8"
+    )
+    && isNonNegativeNumber(truncation.omittedBytes)
+    && isRecord(cursor)
+    && isNonNegativeNumber(cursor.before)
+    && isNonNegativeNumber(cursor.after)
+    && typeof cursor.advanced === "boolean"
+    && isNonNegativeNumber(value.totalBytes)
+    && isNonNegativeNumber(value.totalLines)
+    && isNonNegativeNumber(value.returnedBytes)
+    && isNonNegativeNumber(value.returnedLines)
+    && isOptionalString(value.spillPath);
+}
+
+function isManagedOutputStatus(value: unknown): boolean {
+  return isRecord(value)
+    && isNonNegativeNumber(value.totalBytes)
+    && isNonNegativeNumber(value.totalLines)
+    && isNonNegativeNumber(value.deliveredCursor)
+    && typeof value.spilled === "boolean"
+    && isOptionalString(value.spillPath);
+}
+
+function isManagedProcessStatus(value: unknown): value is ManagedProcessStatus {
+  if (!isRecord(value)) return false;
+  return typeof value.id === "string"
+    && (value.state === "running" || value.state === "completed")
+    && typeof value.command === "string"
+    && typeof value.cwd === "string"
+    && (value.mode === "background" || value.mode === "monitor")
+    && isFiniteNumber(value.pid)
+    && isFiniteNumber(value.startedAt)
+    && (value.completedAt === undefined || isFiniteNumber(value.completedAt))
+    && isNonNegativeNumber(value.durationMs)
+    && isOptionalNullableNumber(value.exitCode)
+    && isOptionalNullableString(value.exitSignal)
+    && typeof value.timedOut === "boolean"
+    && typeof value.stdinClosed === "boolean"
+    && isOptionalString(value.lastSignal)
+    && isManagedOutputStatus(value.output);
+}
+
+function isHistoricalOutputStatus(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.spilled !== "boolean") return false;
+  return (value.totalBytes === undefined || isNonNegativeNumber(value.totalBytes))
+    && (value.totalLines === undefined || isNonNegativeNumber(value.totalLines))
+    && (value.deliveredCursor === undefined
+      || isNonNegativeNumber(value.deliveredCursor))
+    && isOptionalString(value.spillPath);
+}
+
+function isHistoricalProcessStatus(
+  value: unknown,
+): value is HistoricalProcessStatus {
+  if (!isRecord(value)) return false;
+  return typeof value.id === "string"
+    && value.state === "historical"
+    && (value.priorState === undefined
+      || value.priorState === "running"
+      || value.priorState === "completed")
+    && isOptionalString(value.command)
+    && isOptionalString(value.cwd)
+    && (value.mode === undefined
+      || value.mode === "background"
+      || value.mode === "monitor")
+    && (value.pid === undefined || isFiniteNumber(value.pid))
+    && (value.startedAt === undefined || isFiniteNumber(value.startedAt))
+    && (value.completedAt === undefined || isFiniteNumber(value.completedAt))
+    && isOptionalNullableNumber(value.exitCode)
+    && isOptionalNullableString(value.exitSignal)
+    && (value.timedOut === undefined || typeof value.timedOut === "boolean")
+    && (value.stdinClosed === undefined
+      || typeof value.stdinClosed === "boolean")
+    && isOptionalString(value.lastSignal)
+    && (value.runtimeEnd === "graceful" || value.runtimeEnd === "unknown")
+    && isOptionalString(value.shutdownReason)
+    && typeof value.reason === "string"
+    && isHistoricalOutputStatus(value.output);
+}
+
+function isProcessReadToolDetails(
+  value: unknown,
+): value is ProcessReadToolDetails {
+  return isRecord(value)
+    && isManagedProcessStatus(value.process)
+    && isOutputReadResult(value.output);
+}
+
+function isProcessWriteToolDetails(
+  value: unknown,
+): value is ProcessWriteToolDetails {
+  return isRecord(value)
+    && isManagedProcessStatus(value.process)
+    && isNonNegativeNumber(value.bytesWritten)
+    && typeof value.stdinClosed === "boolean";
+}
+
+function isProcessKillToolDetails(
+  value: unknown,
+): value is ProcessKillToolDetails {
+  return isRecord(value)
+    && isManagedProcessStatus(value.process)
+    && typeof value.signal === "string"
+    && typeof value.sent === "boolean"
+    && typeof value.exited === "boolean"
+    && typeof value.waitedForExit === "boolean"
+    && isOutputReadResult(value.output);
+}
+
+function isProcessListToolDetails(
+  value: unknown,
+): value is ProcessListToolDetails {
+  return isRecord(value)
+    && typeof value.includeCompleted === "boolean"
+    && Array.isArray(value.processes)
+    && value.processes.every((status) =>
+      isManagedProcessStatus(status) || isHistoricalProcessStatus(status)
+    );
+}
+
+function isBashProcessDescriptor(
+  value: unknown,
+): value is BashProcessDescriptor {
+  if (!isRecord(value)) return false;
+  return value.kind === "started"
+    && (value.reason === undefined || value.reason === "detached_by_steering")
+    && typeof value.id === "string"
+    && (value.mode === "background" || value.mode === "monitor")
+    && typeof value.command === "string"
+    && typeof value.cwd === "string"
+    && isFiniteNumber(value.pid)
+    && isFiniteNumber(value.startedAt)
+    && (value.timeoutSeconds === undefined
+      || isNonNegativeNumber(value.timeoutSeconds));
+}
+
+function isBashTruncation(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return typeof value.content === "string"
+    && typeof value.truncated === "boolean"
+    && (value.truncatedBy === "lines"
+      || value.truncatedBy === "bytes"
+      || value.truncatedBy === null)
+    && isNonNegativeNumber(value.totalLines)
+    && isNonNegativeNumber(value.totalBytes)
+    && isNonNegativeNumber(value.outputLines)
+    && isNonNegativeNumber(value.outputBytes)
+    && typeof value.lastLinePartial === "boolean"
+    && typeof value.firstLineExceedsLimit === "boolean"
+    && isNonNegativeNumber(value.maxLines)
+    && isNonNegativeNumber(value.maxBytes);
+}
+
+function isBackgroundBashToolDetails(
+  value: unknown,
+): value is BackgroundBashToolDetails {
+  if (!isRecord(value)) return false;
+  const allowedKeys = new Set([
+    "process",
+    "output",
+    "truncation",
+    "fullOutputPath",
+  ]);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return false;
+  if (value.truncation !== undefined && !isBashTruncation(value.truncation)) {
+    return false;
+  }
+  if (!isOptionalString(value.fullOutputPath)) return false;
+  if (value.process === undefined) return value.output === undefined;
+  return isBashProcessDescriptor(value.process)
+    && (value.output === undefined || isOutputReadResult(value.output));
+}
+
 /** A cacheable component that computes theme styling at render time. */
 class WidthSafeComponent implements Component {
   #builder: LineBuilder;
@@ -96,14 +330,25 @@ class WidthSafeComponent implements Component {
   }
 
   render(width: number): string[] {
-    const safeWidth = Math.max(0, Math.floor(width));
+    const safeWidth = Number.isFinite(width)
+      ? Math.max(0, Math.floor(width))
+      : 0;
     if (safeWidth === 0) return [];
     if (this.#cachedWidth === safeWidth && this.#cachedLines !== undefined) {
       return this.#cachedLines;
     }
-    this.#cachedLines = this.#builder(safeWidth).map((line) =>
-      truncateToWidth(line, safeWidth, "…")
-    );
+    try {
+      const lines = this.#builder(safeWidth);
+      this.#cachedLines = (Array.isArray(lines) ? lines : [])
+        .filter((line): line is string => typeof line === "string")
+        .map((line) => truncateToWidth(line, safeWidth, "…"));
+    } catch {
+      // Tool details are persisted and can be changed by other extensions.
+      // Rendering must remain a crash boundary even for hostile legacy shapes.
+      this.#cachedLines = [
+        truncateToWidth("Unable to render tool result safely.", safeWidth, "…"),
+      ];
+    }
     this.#cachedWidth = safeWidth;
     return this.#cachedLines;
   }
@@ -250,12 +495,20 @@ export function installRunningProcessesWidget(
 }
 
 function textContent(result: AgentToolResult<unknown>): string {
-  return result.content
-    .filter((part): part is { type: "text"; text: string } =>
-      part.type === "text"
-    )
-    .map((part) => part.text)
-    .join("\n");
+  try {
+    const content = (result as { content?: unknown }).content;
+    if (!Array.isArray(content)) return "";
+    return content
+      .filter((part): part is { type: "text"; text: string } =>
+        isRecord(part)
+        && part.type === "text"
+        && typeof part.text === "string"
+      )
+      .map((part) => part.text)
+      .join("\n");
+  } catch {
+    return "";
+  }
 }
 
 function cleanDisplayText(text: string): string {
@@ -456,10 +709,10 @@ export function renderBashCall(
 
 function bashDisplayOutput(
   result: AgentToolResult<BackgroundBashToolDetails | undefined>,
+  details: BackgroundBashToolDetails | undefined,
 ): string {
-  const truncation = result.details?.truncation;
+  const truncation = details?.truncation;
   const content = truncation?.truncated
-    && typeof truncation.content === "string"
     ? truncation.content
     : textContent(result);
   return content.trim();
@@ -509,8 +762,12 @@ export function renderBashResult(
     }
   }
 
+  const details = !context.isError
+      && safelyMatches(result.details, isBackgroundBashToolDetails)
+    ? result.details
+    : undefined;
+
   return componentFor(context, (width) => {
-    const details = result.details;
     const descriptor = details?.process;
     const descriptorOutput = details?.output;
     if (descriptor !== undefined) {
@@ -543,7 +800,7 @@ export function renderBashResult(
     if (options.isPartial) lines.push(theme.fg("warning", "running…"));
     else if (context.isError) lines.push(theme.fg("error", "error"));
     lines.push(...outputLines(
-      bashDisplayOutput(result),
+      bashDisplayOutput(result, details),
       width,
       options.expanded,
       theme,
@@ -610,11 +867,15 @@ export function renderProcessReadResult(
   theme: Theme,
   context: RenderContext,
 ): Component {
-  if (result.details === undefined) {
+  if (
+    context.isError
+    || !safelyMatches(result.details, isProcessReadToolDetails)
+  ) {
     return fallbackAuxResult(result, options, theme, context);
   }
+  const details = result.details;
   return componentFor(context, (width) => {
-    const { process: status, output } = result.details;
+    const { process: status, output } = details;
     const lines = [
       processResultSummary(status, theme),
       theme.fg("dim", `${output.returnedBytes} bytes/${output.returnedLines} lines${output.truncation.truncated ? " · truncated" : ""}`),
@@ -650,15 +911,16 @@ export function renderProcessWriteResult(
   theme: Theme,
   context: RenderContext,
 ): Component {
-  if (result.details === undefined) {
+  if (
+    context.isError
+    || !safelyMatches(result.details, isProcessWriteToolDetails)
+  ) {
     return fallbackAuxResult(result, options, theme, context);
   }
-  return componentFor(context, () => {
-    const details = result.details;
-    return [
-      `${theme.fg("success", "✓")} ${theme.fg("accent", details.process.id)} ${theme.fg("muted", `${details.bytesWritten} bytes · stdin ${details.stdinClosed ? "closed" : "open"} · ${stateLabel(details.process)}`)}`,
-    ];
-  });
+  const details = result.details;
+  return componentFor(context, () => [
+    `${theme.fg("success", "✓")} ${theme.fg("accent", details.process.id)} ${theme.fg("muted", `${details.bytesWritten} bytes · stdin ${details.stdinClosed ? "closed" : "open"} · ${stateLabel(details.process)}`)}`,
+  ]);
 }
 
 export function renderProcessKillCall(
@@ -681,11 +943,14 @@ export function renderProcessKillResult(
   theme: Theme,
   context: RenderContext,
 ): Component {
-  if (result.details === undefined) {
+  if (
+    context.isError
+    || !safelyMatches(result.details, isProcessKillToolDetails)
+  ) {
     return fallbackAuxResult(result, options, theme, context);
   }
+  const details = result.details;
   return componentFor(context, (width) => {
-    const details = result.details;
     const lines = [
       `${theme.fg(details.exited ? "success" : "warning", details.exited ? "✓" : "●")} ${theme.fg("accent", details.process.id)} ${theme.fg("muted", `${details.signal} · ${details.exited ? stateLabel(details.process) : "still running"}`)}`,
       ...outputLines(details.output.content, width, options.expanded, theme),
@@ -729,11 +994,15 @@ export function renderProcessListResult(
   theme: Theme,
   context: RenderContext,
 ): Component {
-  if (result.details === undefined) {
+  if (
+    context.isError
+    || !safelyMatches(result.details, isProcessListToolDetails)
+  ) {
     return fallbackAuxResult(result, options, theme, context);
   }
+  const details = result.details;
   return componentFor(context, (width) => {
-    const processes = result.details.processes;
+    const processes = details.processes;
     if (processes.length === 0) return [theme.fg("dim", "no processes")];
     const shown = options.expanded
       ? processes

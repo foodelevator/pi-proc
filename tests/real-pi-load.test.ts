@@ -12,10 +12,12 @@ import {
   DefaultResourceLoader,
   type AgentToolResult,
   type ExtensionUIContext,
+  initTheme,
   SessionManager,
   type Theme,
+  ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import { type Component, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 
 import { PROCESS_NOTIFICATION_MESSAGE_TYPE } from "../background-processes/notification-scheduler";
@@ -587,8 +589,45 @@ describe("real Pi runtime loading", () => {
         reason: "reload",
       });
       runtimeStarted = true;
-      await expect(processRead.execute("historical-p1", { id: "p1" }))
-        .rejects.toThrow("had already completed before reload");
+      let historicalError = "";
+      try {
+        await processRead.execute("historical-p1", { id: "p1" });
+      } catch (error) {
+        historicalError = error instanceof Error ? error.message : String(error);
+      }
+      expect(historicalError).toContain("had already completed before reload");
+
+      initTheme("dark");
+      const processReadDefinition = session.getToolDefinition("process_read");
+      if (processReadDefinition === undefined) {
+        throw new Error("Real process_read definition was unavailable");
+      }
+      const historicalRow = new ToolExecutionComponent(
+        "process_read",
+        "historical-p1-row",
+        { id: "p1" },
+        {},
+        processReadDefinition,
+        { requestRender() {} } as TUI,
+        cwd,
+      );
+      historicalRow.markExecutionStarted();
+      historicalRow.setArgsComplete();
+      // This is the exact error result shape produced by Pi agent-core when a
+      // tool throws: details is {}, not undefined.
+      historicalRow.updateResult({
+        content: [{ type: "text", text: historicalError }],
+        details: {},
+        isError: true,
+      });
+      for (const width of [12, 24, 60]) {
+        const lines = historicalRow.render(width);
+        expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+      }
+      expect(historicalRow.render(60).join("\n")).toContain(
+        "belonged to a previous runtime",
+      );
+
       expect((await processList.execute("list-reloaded", {
         include_completed: true,
       })).details.processes).toEqual([

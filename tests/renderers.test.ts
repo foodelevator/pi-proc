@@ -136,6 +136,60 @@ function count(text: string, needle: string): number {
   return text.split(needle).length - 1;
 }
 
+function processStatus() {
+  return {
+    id: "p1",
+    state: "completed" as const,
+    command: "printf done",
+    cwd: "/tmp",
+    mode: "background" as const,
+    pid: 101,
+    startedAt: 1_000,
+    completedAt: 2_000,
+    durationMs: 1_000,
+    exitCode: 0,
+    exitSignal: null,
+    timedOut: false,
+    stdinClosed: true,
+    output: {
+      totalBytes: 4,
+      totalLines: 1,
+      deliveredCursor: 4,
+      spilled: false,
+    },
+  };
+}
+
+type ManagedToolDefinition =
+  | ReturnType<typeof createBashTool>
+  | ReturnType<typeof createProcessReadTool>
+  | ReturnType<typeof createProcessWriteTool>
+  | ReturnType<typeof createProcessKillTool>
+  | ReturnType<typeof createProcessListTool>;
+
+function renderToolExecution(
+  definition: ManagedToolDefinition,
+  args: unknown,
+  result: { content: Array<{ type: string; text?: string }>; details?: unknown; isError: boolean },
+  width: number,
+  expanded = false,
+): string[] {
+  const row = new ToolExecutionComponent(
+    definition.name,
+    `call-${definition.name}`,
+    args,
+    {},
+    definition,
+    { requestRender() {} } as TUI,
+    process.cwd(),
+  );
+  row.markExecutionStarted();
+  row.setArgsComplete();
+  row.setExpanded(expanded);
+  row.updateResult(result);
+  return row.render(width);
+}
+
 beforeAll(() => {
   initTheme("dark");
 });
@@ -226,6 +280,326 @@ describe("managed process tool renderers", () => {
     for (const tool of [bash, processRead, processWrite, processKill, processList]) {
       expect(tool.renderCall, `${tool.name} renderCall`).toBeTypeOf("function");
       expect(tool.renderResult, `${tool.name} renderResult`).toBeTypeOf("function");
+    }
+  });
+
+  it("renders real Pi error rows for historical, unknown, completed, and state failures", () => {
+    const cases: Array<{
+      tool: ManagedToolDefinition;
+      args: unknown;
+      message: string;
+    }> = [
+      {
+        tool: processRead,
+        args: { id: "p20" },
+        message: "Process `p20` belonged to a previous runtime",
+      },
+      {
+        tool: processRead,
+        args: { id: "p999" },
+        message: "Unknown process ID: p999",
+      },
+      {
+        tool: processWrite,
+        args: { id: "p20", data: "x" },
+        message: "Process `p20` belonged to a previous runtime",
+      },
+      {
+        tool: processWrite,
+        args: { id: "p999", data: "x" },
+        message: "Unknown process ID: p999",
+      },
+      {
+        tool: processWrite,
+        args: { id: "p1", data: "x" },
+        message: "Process `p1` has already completed",
+      },
+      {
+        tool: processWrite,
+        args: { id: "p2", data: "x" },
+        message: "Process `p2` stdin is closed",
+      },
+      {
+        tool: processKill,
+        args: { id: "p20" },
+        message: "Process `p20` belonged to a previous runtime",
+      },
+      {
+        tool: processKill,
+        args: { id: "p404" },
+        message: "Unknown process ID: p404",
+      },
+      {
+        tool: processKill,
+        args: { id: "p1" },
+        message: "Process `p1` has already completed",
+      },
+      {
+        tool: processList,
+        args: {},
+        message: "Process manager is unavailable for this session",
+      },
+      {
+        tool: processList,
+        args: {},
+        message: "Process list aborted",
+      },
+    ];
+
+    for (const { tool, args, message } of cases) {
+      // Pi agent-core represents thrown tool failures with model-facing text,
+      // details: {}, and isError: true.
+      const lines = renderToolExecution(
+        tool,
+        args,
+        {
+          content: [{ type: "text", text: message }],
+          details: {},
+          isError: true,
+        },
+        80,
+      );
+      const rendered = plain(lines);
+      expect(rendered, `${tool.name}: ${message}`).toContain("error");
+      expect(rendered, `${tool.name}: ${message}`).toContain(message);
+      assertWidths(lines, 80);
+    }
+  });
+
+  it("treats isError as authoritative even when every tool receives valid success details", () => {
+    const snapshot = output("done");
+    const status = processStatus();
+    const cases: Array<{
+      tool: ManagedToolDefinition;
+      args: unknown;
+      details: unknown;
+    }> = [
+      {
+        tool: bash,
+        args: { command: "true", mode: "background" },
+        details: {
+          process: {
+            kind: "started",
+            id: "p1",
+            mode: "background",
+            command: "true",
+            cwd: "/tmp",
+            pid: 101,
+            startedAt: 1_000,
+          },
+        },
+      },
+      {
+        tool: processRead,
+        args: { id: "p1" },
+        details: { process: status, output: snapshot },
+      },
+      {
+        tool: processWrite,
+        args: { id: "p1", data: "done" },
+        details: {
+          process: status,
+          bytesWritten: 4,
+          stdinClosed: true,
+        },
+      },
+      {
+        tool: processKill,
+        args: { id: "p1" },
+        details: {
+          process: status,
+          signal: "SIGTERM",
+          sent: true,
+          exited: true,
+          waitedForExit: true,
+          output: snapshot,
+        },
+      },
+      {
+        tool: processList,
+        args: { include_completed: true },
+        details: { includeCompleted: true, processes: [status] },
+      },
+    ];
+
+    for (const { tool, args, details } of cases) {
+      const message = `${tool.name} model-facing failure`;
+      const lines = renderToolExecution(
+        tool,
+        args,
+        {
+          content: [{ type: "text", text: message }],
+          details,
+          isError: true,
+        },
+        64,
+        true,
+      );
+      const rendered = plain(lines);
+      expect(rendered).toContain("error");
+      expect(rendered).toContain(message);
+      expect(rendered).not.toContain("printf done");
+      assertWidths(lines, 64);
+    }
+  });
+
+  it("fuzzes null, malformed, and partial details through real Pi rows at narrow widths", () => {
+    const definitions: Array<{
+      tool: ManagedToolDefinition;
+      args: unknown;
+    }> = [
+      { tool: bash, args: { command: "true" } },
+      { tool: processRead, args: { id: "p1" } },
+      { tool: processWrite, args: { id: "p1", data: "x" } },
+      { tool: processKill, args: { id: "p1" } },
+      { tool: processList, args: {} },
+    ];
+    const malformed: unknown[] = [
+      null,
+      true,
+      0,
+      "details",
+      [],
+      {},
+      { process: null },
+      { process: {} },
+      { process: { id: "p1" } },
+      { process: { state: "unknown" }, output: null },
+      { output: {} },
+      { output: { content: null } },
+      { processes: null },
+      { processes: [{}] },
+      { truncation: { truncated: true } },
+      { process: processStatus(), output: { content: "partial" } },
+      Object.defineProperty({}, "process", {
+        enumerable: true,
+        get() {
+          throw new Error("hostile process getter");
+        },
+      }),
+      new Proxy({}, {
+        get() {
+          throw new Error("hostile details getter");
+        },
+        ownKeys() {
+          throw new Error("hostile details keys");
+        },
+      }),
+    ];
+    let seed = 0x51f15e;
+    const next = (): number => {
+      seed = (seed * 1_664_525 + 1_013_904_223) >>> 0;
+      return seed;
+    };
+    const randomValue = (depth: number): unknown => {
+      const leaves: unknown[] = [null, false, 17, "x", [], {}];
+      if (depth === 0) return leaves[next() % leaves.length];
+      switch (next() % 4) {
+        case 0:
+          return Array.from(
+            { length: next() % 4 },
+            () => randomValue(depth - 1),
+          );
+        case 1:
+          return {
+            process: randomValue(depth - 1),
+            output: randomValue(depth - 1),
+          };
+        case 2:
+          return {
+            processes: randomValue(depth - 1),
+            truncation: randomValue(depth - 1),
+          };
+        default:
+          return leaves[next() % leaves.length];
+      }
+    };
+    for (let index = 0; index < 64; index++) {
+      malformed.push(randomValue(3));
+    }
+
+    for (const { tool, args } of definitions) {
+      for (const details of malformed) {
+        for (const isError of [false, true]) {
+          for (const expanded of [false, true]) {
+            for (const width of [4, 5, 7, 12, 16, 24]) {
+              const lines = renderToolExecution(
+                tool,
+                args,
+                {
+                  content: [{ type: "text", text: "safe fallback text" }],
+                  details,
+                  isError,
+                },
+                width,
+                expanded,
+              );
+              assertWidths(lines, width);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("preserves structured success rendering for every auxiliary tool", () => {
+    const snapshot = output("structured-output");
+    const status = processStatus();
+    const cases: Array<{
+      tool: ManagedToolDefinition;
+      args: unknown;
+      details: unknown;
+      expected: string;
+    }> = [
+      {
+        tool: processRead,
+        args: { id: "p1" },
+        details: { process: status, output: snapshot },
+        expected: "structured-output",
+      },
+      {
+        tool: processWrite,
+        args: { id: "p1", data: "done" },
+        details: { process: status, bytesWritten: 4, stdinClosed: true },
+        expected: "4 bytes",
+      },
+      {
+        tool: processKill,
+        args: { id: "p1" },
+        details: {
+          process: status,
+          signal: "SIGTERM",
+          sent: true,
+          exited: true,
+          waitedForExit: true,
+          output: snapshot,
+        },
+        expected: "SIGTERM",
+      },
+      {
+        tool: processList,
+        args: { include_completed: true },
+        details: { includeCompleted: true, processes: [status] },
+        expected: "printf done",
+      },
+    ];
+
+    for (const { tool, args, details, expected } of cases) {
+      const lines = renderToolExecution(
+        tool,
+        args,
+        {
+          content: [{ type: "text", text: "unstructured fallback" }],
+          details,
+          isError: false,
+        },
+        80,
+        true,
+      );
+      const rendered = plain(lines);
+      expect(rendered).toContain(expected);
+      expect(rendered).not.toContain("unstructured fallback");
+      assertWidths(lines, 80);
     }
   });
 
@@ -433,12 +807,18 @@ describe("managed process tool renderers", () => {
       content: [{ type: "text" as const, text: Array.from({ length: 12 }, (_, index) => `line-${index}`).join("\n") }],
       details: {
         truncation: {
+          content: Array.from(
+            { length: 12 },
+            (_, index) => `line-${index}`,
+          ).join("\n"),
           truncated: true,
           truncatedBy: "lines",
           outputLines: 12,
           outputBytes: 80,
           totalLines: 100,
           totalBytes: 900,
+          lastLinePartial: false,
+          firstLineExceedsLimit: false,
           maxLines: 12,
           maxBytes: 80,
         },
