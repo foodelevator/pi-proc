@@ -259,6 +259,7 @@ export class ProcessNotificationScheduler {
   #windowStartedAt: number | undefined;
   #timer: NodeJS.Timeout | undefined;
   #expiredWhileBusy = false;
+  #reportingError = false;
   #closed = false;
 
   constructor(options: ProcessNotificationSchedulerOptions) {
@@ -295,8 +296,11 @@ export class ProcessNotificationScheduler {
   }
 
   handleTurnEnd(): void {
-    if (this.#closed || !this.#expiredWhileBusy) return;
-    this.#flush();
+    this.#releaseExpiredBatch();
+  }
+
+  handleAgentSettled(): void {
+    this.#releaseExpiredBatch();
   }
 
   shutdown(): void {
@@ -323,6 +327,11 @@ export class ProcessNotificationScheduler {
     if (this.#windowStartedAt === undefined) {
       this.#windowStartedAt = this.#options.now();
       this.#armTimer();
+    } else if (this.#expiredWhileBusy) {
+      // A busy window has already earned immediate lifecycle delivery. Keep
+      // that eligibility, but re-arm a fixed recheck from fresh activity so a
+      // missed lifecycle edge can never leave the global batch permanently stuck.
+      this.#armTimer();
     }
   }
 
@@ -331,11 +340,16 @@ export class ProcessNotificationScheduler {
     this.#timer = setTimeout(() => {
       this.#timer = undefined;
       if (this.#closed || this.#pending.size === 0) return;
-      let idle = false;
+      let idle: boolean;
       try {
         idle = this.#options.isIdle();
       } catch (error) {
+        // Publish the releasable state before invoking external error handling.
+        // An error reporter is allowed to synchronously trigger lifecycle work.
+        this.#expiredWhileBusy = true;
+        this.#armTimer();
         this.#report(error);
+        return;
       }
       if (idle) this.#flush();
       else this.#expiredWhileBusy = true;
@@ -347,6 +361,11 @@ export class ProcessNotificationScheduler {
     if (this.#timer === undefined) return;
     clearTimeout(this.#timer);
     this.#timer = undefined;
+  }
+
+  #releaseExpiredBatch(): void {
+    if (this.#closed || !this.#expiredWhileBusy) return;
+    this.#flush();
   }
 
   #flush(): void {
@@ -376,7 +395,6 @@ export class ProcessNotificationScheduler {
         commit.process.outputStore.advanceDeliveredCursor(commit.end);
       }
     } catch (error) {
-      this.#report(error);
       for (const entry of batch) {
         const current = this.#pending.get(entry.process.id);
         if (current === undefined) {
@@ -387,22 +405,23 @@ export class ProcessNotificationScheduler {
         }
       }
       this.#windowStartedAt = windowStartedAt;
-      let idle = false;
-      try {
-        idle = this.#options.isIdle();
-      } catch (idleError) {
-        this.#report(idleError);
-      }
-      if (idle) this.#armTimer();
-      else this.#expiredWhileBusy = true;
+      this.#expiredWhileBusy = true;
+      // A failed lifecycle flush may have consumed the final turn/settled edge.
+      // Always leave an independent retry armed before reporting the failure.
+      this.#armTimer();
+      this.#report(error);
     }
   }
 
   #report(error: unknown): void {
+    if (this.#reportingError) return;
+    this.#reportingError = true;
     try {
       this.#options.onError?.(asError(error));
     } catch {
       // Error reporting must not destabilize process notification supervision.
+    } finally {
+      this.#reportingError = false;
     }
   }
 }

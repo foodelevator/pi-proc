@@ -292,6 +292,113 @@ describe("real Pi runtime loading", () => {
     }
   });
 
+  it("releases a notification that expires in the real last-turn-to-settled gap", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pibg-real-settled-cwd-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "pibg-real-settled-agent-"));
+    const loader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      additionalExtensionPaths: [process.cwd()],
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+    let session: Awaited<ReturnType<typeof createAgentSession>>["session"]
+      | undefined;
+
+    try {
+      await loader.reload();
+      expect(loader.getExtensions().errors).toEqual([]);
+      const created = await createAgentSession({
+        cwd,
+        agentDir,
+        resourceLoader: loader,
+        sessionManager: SessionManager.inMemory(cwd),
+        tools: ["bash", "process_list"],
+      });
+      session = created.session;
+      const notifications: Array<{ message: unknown; options: unknown }> = [];
+      vi.spyOn(session, "sendCustomMessage").mockImplementation(
+        (message, options) => {
+          notifications.push({ message, options });
+          return Promise.resolve();
+        },
+      );
+      await session.bindExtensions({ mode: "rpc" });
+      const bash = session.state.tools.find((tool) => tool.name === "bash");
+      const processList = session.state.tools.find(
+        (tool) => tool.name === "process_list",
+      ) as RuntimeTool<ProcessListToolInput, ProcessListToolDetails> | undefined;
+      if (bash === undefined || processList === undefined) {
+        throw new Error("Managed process tools were not active");
+      }
+
+      const lifecycle = session as unknown as {
+        _isAgentRunActive: boolean;
+        _emitAgentSettled: () => Promise<void>;
+      };
+      lifecycle._isAgentRunActive = true;
+      await session.extensionRunner.emit({
+        type: "turn_end",
+        turnIndex: 0,
+        message: {
+          role: "custom",
+          customType: "last-turn-fixture",
+          content: "last turn ended",
+          display: false,
+          timestamp: Date.now(),
+        },
+        toolResults: [],
+      });
+      expect(session.isIdle).toBe(false);
+
+      await bash.execute("last-turn-background", {
+        command: "printf last-turn-gap",
+        mode: "background",
+      });
+      await waitUntil(async () => {
+        const listed = await processList.execute("last-turn-list", {
+          include_completed: true,
+        });
+        return listed.details.processes.some((process) =>
+          process.id === "p1" && process.state === "completed"
+        );
+      });
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(notifications).toEqual([]);
+
+      await lifecycle._emitAgentSettled();
+
+      expect(session.isIdle).toBe(true);
+      await waitUntil(() => notifications.length === 1);
+      expect(notifications[0]).toMatchObject({
+        message: {
+          customType: "pibg-process-events",
+          details: {
+            processes: [{
+              id: "p1",
+              events: ["completed"],
+              output: { content: "last-turn-gap" },
+            }],
+          },
+        },
+        options: { triggerTurn: true, deliverAs: "steer" },
+      });
+    } finally {
+      try {
+        await session?.extensionRunner.emit({
+          type: "session_shutdown",
+          reason: "quit",
+        });
+      } finally {
+        session?.dispose();
+        rmSync(cwd, { recursive: true, force: true });
+        rmSync(agentDir, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("keeps a real print-mode session wait-only", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "pibg-real-print-cwd-"));
     const agentDir = mkdtempSync(join(tmpdir(), "pibg-real-print-agent-"));

@@ -144,6 +144,22 @@ export type {
   StartProcessOptions,
 } from "./types";
 
+function reportNotificationError(
+  ctx: ExtensionContext,
+  error: Error,
+): void {
+  const message = `Background process notification error: ${error.message}`;
+  try {
+    ctx.ui.notify(message, "error");
+  } catch {
+    try {
+      process.stderr.write(`[pibg] ${message}\n`);
+    } catch {
+      // A stale UI and a closed stderr must not destabilize process cleanup.
+    }
+  }
+}
+
 function sessionEnvironment(ctx: ExtensionContext) {
   const model = ctx.model;
   return {
@@ -201,6 +217,10 @@ export function createBackgroundProcessesExtension(
       notifications?.handleTurnEnd();
     });
 
+    pi.on("agent_settled", () => {
+      notifications?.handleAgentSettled();
+    });
+
     pi.on("session_start", async (_event, ctx) => {
       const next = createManager({
         cwd: ctx.cwd,
@@ -211,6 +231,9 @@ export function createBackgroundProcessesExtension(
         isIdle: () => ctx.isIdle(),
         sendMessage: (message, delivery) => {
           pi.sendMessage(message, delivery);
+        },
+        onError: (error) => {
+          reportNotificationError(ctx, error);
         },
       });
       const previous = manager;

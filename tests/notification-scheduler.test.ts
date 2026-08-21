@@ -176,6 +176,99 @@ describe("global process notification scheduling", () => {
     value.scheduler.shutdown();
   });
 
+  it("releases a last-turn busy batch from agent_settled without waiting for user input", () => {
+    vi.useFakeTimers();
+    const value = harness(false);
+    const record = fakeRecord("p1", "background");
+    record.outputStore.append("last-turn");
+    value.source.emit({
+      type: "completed",
+      process: record,
+      completion: complete(record),
+    });
+    vi.advanceTimersByTime(200);
+    expect(value.sent).toEqual([]);
+
+    value.setIdle(true);
+    value.scheduler.handleAgentSettled();
+    value.scheduler.handleTurnEnd();
+    value.scheduler.handleAgentSettled();
+
+    expect(value.sent).toHaveLength(1);
+    expect(detailsOf(value).processes[0]?.output.content).toBe("last-turn");
+    expect(value.scheduler.pendingProcessCount).toBe(0);
+    value.scheduler.shutdown();
+  });
+
+  it("handles timer/lifecycle ordering races exactly once", () => {
+    vi.useFakeTimers();
+
+    for (const releaseOrder of ["turn-first", "settled-first"] as const) {
+      const value = harness(false);
+      const record = fakeRecord(releaseOrder === "turn-first" ? "p1" : "p2");
+      record.outputStore.append(releaseOrder);
+      value.source.emit({ type: "stdout-activity", process: record });
+      vi.advanceTimersByTime(200);
+      value.setIdle(true);
+      if (releaseOrder === "turn-first") {
+        value.scheduler.handleTurnEnd();
+        value.scheduler.handleAgentSettled();
+      } else {
+        value.scheduler.handleAgentSettled();
+        value.scheduler.handleTurnEnd();
+      }
+      vi.runOnlyPendingTimers();
+      expect(value.sent).toHaveLength(1);
+      value.scheduler.shutdown();
+    }
+
+    const settledBeforeTimer = harness(false);
+    const record = fakeRecord("p3");
+    record.outputStore.append("timer-wins");
+    settledBeforeTimer.source.emit({ type: "stdout-activity", process: record });
+    vi.advanceTimersByTime(199);
+    settledBeforeTimer.setIdle(true);
+    settledBeforeTimer.scheduler.handleAgentSettled();
+    expect(settledBeforeTimer.sent).toEqual([]);
+    vi.advanceTimersByTime(1);
+    settledBeforeTimer.scheduler.handleTurnEnd();
+    expect(settledBeforeTimer.sent).toHaveLength(1);
+    settledBeforeTimer.scheduler.shutdown();
+  });
+
+  it("re-arms on new activity after busy expiry and keeps post-flush events in a fresh window", () => {
+    vi.useFakeTimers();
+    const value = harness(false);
+    const first = fakeRecord("p1");
+    const second = fakeRecord("p2");
+    first.outputStore.append("first");
+    value.source.emit({ type: "stdout-activity", process: first });
+    vi.advanceTimersByTime(200);
+    expect(value.scheduler.hasTimer).toBe(false);
+
+    second.outputStore.append("second");
+    value.source.emit({ type: "stdout-activity", process: second });
+    expect(value.scheduler.hasTimer).toBe(true);
+    value.setIdle(true);
+    vi.advanceTimersByTime(200);
+    expect(value.sent).toHaveLength(1);
+    expect(detailsOf(value).processes.map((item) => item.id)).toEqual([
+      "p1",
+      "p2",
+    ]);
+
+    const third = fakeRecord("p3");
+    third.outputStore.append("third");
+    value.source.emit({ type: "stdout-activity", process: third });
+    value.scheduler.handleAgentSettled();
+    expect(value.sent).toHaveLength(1);
+    vi.advanceTimersByTime(200);
+    expect(value.sent).toHaveLength(2);
+    expect(value.sent[1]?.message.details.processes.map((item) => item.id))
+      .toEqual(["p3"]);
+    value.scheduler.shutdown();
+  });
+
   it("stays silent for stderr-only monitor activity, then includes it on stdout or completion", () => {
     vi.useFakeTimers();
     const value = harness();
@@ -327,9 +420,10 @@ describe("global process notification scheduling", () => {
     const delivered: ProcessNotificationMessage[] = [];
     const errors: Error[] = [];
     let attempts = 0;
+    let idle = false;
     const scheduler = new ProcessNotificationScheduler({
       eventSource: source,
-      isIdle: () => true,
+      isIdle: () => idle,
       sendMessage(message) {
         attempts++;
         if (attempts === 1) throw new Error("send failed");
@@ -342,9 +436,13 @@ describe("global process notification scheduling", () => {
     source.emit({ type: "stdout-activity", process: record });
 
     vi.advanceTimersByTime(200);
+    expect(attempts).toBe(0);
+    idle = true;
+    scheduler.handleAgentSettled();
     expect(record.deliveredCursor).toBe(0);
     expect(delivered).toEqual([]);
     expect(errors[0]?.message).toBe("send failed");
+    expect(scheduler.hasTimer).toBe(true);
 
     record.outputStore.append("-later");
     vi.advanceTimersByTime(200);
@@ -353,6 +451,38 @@ describe("global process notification scheduling", () => {
       "not-lost-later",
     );
     expect(record.deliveredCursor).toBe(14);
+    scheduler.shutdown();
+  });
+
+  it("makes isIdle failures releasable before invoking the error callback", () => {
+    vi.useFakeTimers();
+    const source = new FakeEventSource();
+    const sent: ProcessNotificationMessage[] = [];
+    const errors: Error[] = [];
+    const scheduler = new ProcessNotificationScheduler({
+      eventSource: source,
+      isIdle: () => {
+        throw new Error("stale idle context");
+      },
+      sendMessage: (message) => sent.push(message),
+      onError(error) {
+        errors.push(error);
+        scheduler.handleAgentSettled();
+      },
+    });
+    const record = fakeRecord("p1");
+    record.outputStore.append("recoverable");
+    source.emit({ type: "stdout-activity", process: record });
+
+    vi.advanceTimersByTime(200);
+
+    expect(errors.map((error) => error.message)).toEqual([
+      "stale idle context",
+    ]);
+    expect(sent).toHaveLength(1);
+    expect(record.deliveredCursor).toBe(11);
+    scheduler.handleTurnEnd();
+    expect(sent).toHaveLength(1);
     scheduler.shutdown();
   });
 
