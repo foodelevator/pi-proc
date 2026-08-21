@@ -1,5 +1,5 @@
 import { getEventListeners } from "node:events";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { constants as osConstants, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -141,26 +141,29 @@ describe("auxiliary tool schemas and prompts", () => {
       minimum: 1,
     });
     expect(startSchema.description).toContain(
-      "single delivered cursor shared with monitor/completion notifications",
+      "single delivered cursor shared with monitor/completion notifications, detachment results, and process_kill output",
     );
     expect(startSchema.description).toContain(
-      "remain unread and may appear again",
+      "use reported omitted byte ranges with start to recover skipped or already-delivered output",
+    );
+    expect(startSchema.description).toContain(
+      "bytes at or beyond the shared cursor remain unread",
     );
     expect(auxiliary.read.description).toContain(
-      "one delivered cursor shared by cursorless process_read calls and monitor/completion notifications",
+      "one delivered cursor shared by cursorless process_read calls, monitor/completion notifications, detachment results, and process_kill output",
     );
     expect(auxiliary.read.promptSnippet).toContain(
-      "cursorless reads consume the notification-shared cursor",
+      "start recovers ranges without consuming",
     );
     expect(auxiliary.read.promptGuidelines).toEqual(expect.arrayContaining([
       expect.stringContaining(
         "Omit start to consume unread combined output and advance that shared cursor",
       ),
       expect.stringContaining(
-        "explicit non-consuming replay/range read",
+        "Use reported omitted byte ranges with start to recover skipped or already-delivered output",
       ),
       expect.stringContaining(
-        "may appear again in later automatic notifications or cursorless process_read calls",
+        "bytes at or beyond the shared cursor remain unread",
       ),
     ]));
     expect(auxiliary.write.description).toContain("never appends a newline");
@@ -175,6 +178,23 @@ describe("auxiliary tool schemas and prompts", () => {
       id: "p1",
       signal: "NOT_A_SIGNAL",
     })).rejects.toThrow("Unsupported signal on this platform");
+  });
+
+  it("documents the complete shared-cursor contract in the README", () => {
+    const readme = readFileSync(
+      new URL("../README.md", import.meta.url),
+      "utf8",
+    );
+
+    expect(readme).toContain(
+      "A cursorless read (no `start`) consumes unread combined output and advances the same cursor also consumed by monitor/completion notifications, foreground-detachment results, and `process_kill` output.",
+    );
+    expect(readme).toContain(
+      "Use reported omitted byte ranges with `start` to recover skipped or already-delivered output.",
+    );
+    expect(readme).toContain(
+      "bytes at or beyond the shared cursor remain unread and may appear again in a later automatic notification or cursorless `process_read`",
+    );
   });
 });
 

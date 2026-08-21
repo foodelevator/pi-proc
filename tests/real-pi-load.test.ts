@@ -243,35 +243,41 @@ describe("real Pi runtime loading", () => {
         properties: { start: { description?: string } };
       }).properties.start;
       expect(registeredStartSchema.description).toContain(
-        "single delivered cursor shared with monitor/completion notifications",
+        "single delivered cursor shared with monitor/completion notifications, detachment results, and process_kill output",
       );
       expect(registeredStartSchema.description).toContain(
-        "remain unread and may appear again",
+        "use reported omitted byte ranges with start to recover skipped or already-delivered output",
+      );
+      expect(registeredStartSchema.description).toContain(
+        "bytes at or beyond the shared cursor remain unread",
       );
       expect(processReadDefinition.description).toContain(
-        "one delivered cursor shared by cursorless process_read calls and monitor/completion notifications",
+        "one delivered cursor shared by cursorless process_read calls, monitor/completion notifications, detachment results, and process_kill output",
       );
       expect(processReadDefinition.description).toContain(
-        "explicit non-consuming replay/range read",
+        "use reported omitted byte ranges with start to recover skipped or already-delivered output",
       );
-      expect(processReadDefinition.promptSnippet).toContain(
-        "cursorless reads consume the notification-shared cursor",
+      expect(processReadDefinition.description).toContain(
+        "fetched bytes at or beyond the shared cursor remain unread",
+      );
+      expect(processReadDefinition.promptSnippet).toBe(
+        "Read combined process output; cursorless reads consume the cursor shared with notifications, detachment, and process_kill, while start recovers ranges without consuming",
       );
       expect(processReadDefinition.promptGuidelines).toEqual([
-        "process_read has one delivered cursor shared with monitor and completion notifications. Omit start to consume unread combined output and advance that shared cursor.",
-        "Supplying start to process_read is an explicit non-consuming replay/range read: it does not mark fetched bytes as delivered, so bytes not already past the shared cursor remain unread and may appear again in later automatic notifications or cursorless process_read calls.",
+        "process_read has one delivered cursor shared with monitor/completion notifications, detachment results, and process_kill output. Omit start to consume unread combined output and advance that shared cursor.",
+        "Supplying start to process_read is an explicit non-consuming replay/range read. Use reported omitted byte ranges with start to recover skipped or already-delivered output. It does not mark fetched bytes as delivered, so bytes at or beyond the shared cursor remain unread and may appear again in later automatic notifications or cursorless process_read calls.",
       ]);
       expect(session.systemPrompt).toContain(
         "Execute bash commands, optionally as managed background or monitor processes",
       );
       expect(session.systemPrompt).toContain(
-        "- process_read: Read combined process output; cursorless reads consume the notification-shared cursor, while start replays without consuming",
+        "- process_read: Read combined process output; cursorless reads consume the cursor shared with notifications, detachment, and process_kill, while start recovers ranges without consuming",
       );
       expect(session.systemPrompt).toContain(
-        "- process_read has one delivered cursor shared with monitor and completion notifications. Omit start to consume unread combined output and advance that shared cursor.",
+        "- process_read has one delivered cursor shared with monitor/completion notifications, detachment results, and process_kill output. Omit start to consume unread combined output and advance that shared cursor.",
       );
       expect(session.systemPrompt).toContain(
-        "- Supplying start to process_read is an explicit non-consuming replay/range read: it does not mark fetched bytes as delivered, so bytes not already past the shared cursor remain unread and may appear again in later automatic notifications or cursorless process_read calls.",
+        "- Supplying start to process_read is an explicit non-consuming replay/range read. Use reported omitted byte ranges with start to recover skipped or already-delivered output. It does not mark fetched bytes as delivered, so bytes at or beyond the shared cursor remain unread and may appear again in later automatic notifications or cursorless process_read calls.",
       );
       expect(session.systemPrompt).toContain(
         "process_write does not add a newline",
