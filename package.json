@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Managed background processes, monitoring, and notifications for Pi on macOS and Linux",
   "type": "module",
-  "license": "MIT",
+  "license": "ISC",
   "os": [
     "darwin",
     "linux"
