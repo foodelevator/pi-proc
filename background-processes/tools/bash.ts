@@ -19,6 +19,7 @@ import type {
   OutputReadResult,
   PublicProcessMode,
 } from "../types";
+import { renderBashCall, renderBashResult } from "../ui";
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
@@ -247,6 +248,8 @@ export function createBashTool(
       "Use bash mode background or monitor instead of shell-level &, nohup, or daemonization, then manage the returned ID with process_read, process_write, process_kill, and process_list.",
     ],
     parameters: bashSchema,
+    renderCall: renderBashCall,
+    renderResult: renderBashResult,
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const mode = params.mode ?? "wait";

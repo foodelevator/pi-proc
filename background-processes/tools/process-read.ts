@@ -5,6 +5,7 @@ import {
 import { type Static, Type } from "typebox";
 
 import type { OutputReadResult } from "../types";
+import { renderProcessReadCall, renderProcessReadResult } from "../ui";
 import {
   formatOutputSnapshot,
   formatProcessState,
@@ -57,6 +58,8 @@ export function createProcessReadTool(
       "Use process_read without start to consume new managed-process output; use an explicit start byte to recover omitted or previously delivered output without moving the implicit cursor.",
     ],
     parameters: processReadSchema,
+    renderCall: renderProcessReadCall,
+    renderResult: renderProcessReadResult,
 
     execute(_toolCallId, params, signal) {
       return Promise.resolve().then(() => {

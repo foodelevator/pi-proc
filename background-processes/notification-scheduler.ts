@@ -3,8 +3,6 @@ import {
   DEFAULT_MAX_LINES,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
-
 import type {
   ProcessManagerEvent,
   ProcessManagerEventListener,
@@ -19,6 +17,7 @@ import {
   type ManagedProcessStatus,
   snapshotProcessStatus,
 } from "./tools/process-utils";
+import { renderProcessNotificationMessage } from "./ui";
 
 export const PROCESS_NOTIFICATION_MESSAGE_TYPE = "pibg-process-events";
 export const PROCESS_NOTIFICATION_WINDOW_MS = 200;
@@ -426,22 +425,19 @@ export class ProcessNotificationScheduler {
   }
 }
 
-/** Compact by default; expansion shows the exact model-facing batch text. */
+/** Compact by default; expansion renders bounded structured process details. */
 export function registerProcessNotificationRenderer(pi: ExtensionAPI): void {
   pi.registerMessageRenderer<ProcessNotificationBatchDetails>(
     PROCESS_NOTIFICATION_MESSAGE_TYPE,
-    (message, { expanded, outputPad }, theme) => {
-      const details = message.details;
-      const summary = details?.processes.map((item) =>
-        `${item.id} ${item.events.join("+")}`
-      ).join(", ") ?? "process update";
-      const content = typeof message.content === "string"
-        ? message.content
-        : "Managed process notification";
-      const text = expanded
-        ? content
-        : `${theme.fg("accent", "processes")} ${theme.fg("muted", summary)}`;
-      return new Text(text, outputPad, 0);
-    },
+    (message, options, theme) => renderProcessNotificationMessage(
+      {
+        content: typeof message.content === "string"
+          ? message.content
+          : "Managed process notification",
+        details: message.details,
+      },
+      options,
+      theme,
+    ),
   );
 }

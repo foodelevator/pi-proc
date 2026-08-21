@@ -4,6 +4,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 
+import { renderProcessListCall, renderProcessListResult } from "../ui";
 import {
   formatProcessState,
   type HistoricalProcessStatus,
@@ -52,6 +53,8 @@ export function createProcessListTool(
       "Use process_list to discover managed process IDs and status; pass include_completed=true only when completed-process history is relevant.",
     ],
     parameters: processListSchema,
+    renderCall: renderProcessListCall,
+    renderResult: renderProcessListResult,
 
     execute(_toolCallId, params, signal) {
       return Promise.resolve().then(() => {

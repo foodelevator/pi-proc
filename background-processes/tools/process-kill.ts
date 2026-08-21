@@ -12,6 +12,7 @@ import {
   normalizeSignal,
 } from "../process-manager";
 import type { OutputReadResult, ProcessSignalResult } from "../types";
+import { renderProcessKillCall, renderProcessKillResult } from "../ui";
 import {
   formatOutputSnapshot,
   formatProcessState,
@@ -66,6 +67,8 @@ export function createProcessKillTool(
       "Use process_kill with its default SIGTERM for graceful termination; if the process survives, call process_kill again with SIGKILL only when force termination is appropriate.",
     ],
     parameters: processKillSchema,
+    renderCall: renderProcessKillCall,
+    renderResult: renderProcessKillResult,
 
     async execute(_toolCallId, params, signal) {
       if (signal?.aborted) throw new Error("Process kill aborted");

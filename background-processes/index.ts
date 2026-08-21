@@ -20,6 +20,10 @@ import { registerProcessKillTool } from "./tools/process-kill";
 import { registerProcessListTool } from "./tools/process-list";
 import { registerProcessReadTool } from "./tools/process-read";
 import { registerProcessWriteTool } from "./tools/process-write";
+import {
+  installRunningProcessesWidget,
+  type RunningProcessesWidgetController,
+} from "./ui";
 
 export { OutputStore } from "./output-store";
 export {
@@ -135,6 +139,14 @@ export type {
   ProcessWriteToolDetails,
   ProcessWriteToolInput,
 } from "./tools/process-write";
+export {
+  createRunningProcessesWidget,
+  installRunningProcessesWidget,
+  normalizeCommandLine,
+  renderProcessNotificationMessage,
+  RUNNING_PROCESSES_WIDGET_KEY,
+} from "./ui";
+export type { RunningProcessesWidgetController } from "./ui";
 export type {
   HistoricalProcessStatus,
   ManagedProcessOutputStatus,
@@ -241,6 +253,7 @@ export function createBackgroundProcessesExtension(
   return (pi) => {
     let manager: ProcessManager | undefined;
     let notifications: ProcessNotificationScheduler | undefined;
+    let runningProcessesWidget: RunningProcessesWidgetController | undefined;
     let runtimeId: string | undefined;
 
     registerProcessNotificationRenderer(pi);
@@ -273,6 +286,9 @@ export function createBackgroundProcessesExtension(
     pi.on("session_start", async (_event, ctx) => {
       const previous = manager;
       const previousNotifications = notifications;
+      const previousWidget = runningProcessesWidget;
+      runningProcessesWidget = undefined;
+      previousWidget?.dispose();
       previousNotifications?.shutdown();
       previous?.beginShutdown();
 
@@ -281,6 +297,15 @@ export function createBackgroundProcessesExtension(
         cwd: ctx.cwd,
         sessionEnvironment: () => sessionEnvironment(ctx),
         initialProcessNumber: recovery.nextProcessNumber,
+        onStarted: (execution) => {
+          if (execution.id !== undefined) runningProcessesWidget?.refresh();
+        },
+        onPromoted: () => {
+          runningProcessesWidget?.refresh();
+        },
+        onCompleted: (execution) => {
+          if (execution.id !== undefined) runningProcessesWidget?.refresh();
+        },
       });
       for (const historical of recovery.historical) {
         next.registerHistoricalProcess(historical);
@@ -297,6 +322,7 @@ export function createBackgroundProcessesExtension(
       });
       manager = next;
       notifications = nextNotifications;
+      runningProcessesWidget = installRunningProcessesWidget(next, ctx);
       runtimeId = randomUUID();
       if (previous !== undefined) await previous.shutdown();
     });
@@ -304,14 +330,17 @@ export function createBackgroundProcessesExtension(
     pi.on("session_shutdown", async (event, ctx) => {
       const current = manager;
       const currentNotifications = notifications;
+      const currentWidget = runningProcessesWidget;
       const currentRuntimeId = runtimeId;
       manager = undefined;
       notifications = undefined;
+      runningProcessesWidget = undefined;
       runtimeId = undefined;
 
       // No process event, retry timer, or stale session callback may run after
       // persistence begins. /tree emits neither shutdown nor start and therefore
       // intentionally leaves this runtime untouched.
+      currentWidget?.dispose();
       currentNotifications?.shutdown();
       current?.beginShutdown();
 

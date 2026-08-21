@@ -131,6 +131,10 @@ export interface ProcessManagerCallbacks {
   ) => void;
   onStarted?: (execution: ProcessExecution) => void;
   onPromoted?: (record: ManagedProcessRecord) => void;
+  onCompleted?: (
+    execution: ProcessExecution,
+    completion: ProcessCompletion,
+  ) => void;
   onCallbackError?: (error: Error) => void;
 }
 
@@ -1039,6 +1043,9 @@ export class ProcessManager {
       internal.foregroundState = "completed";
       internal.resolveWaitOutcome({ type: "completed", completion });
     }
+    callSafely(this.#callbacks.onCallbackError, () => {
+      this.#callbacks.onCompleted?.(internal, completion);
+    });
     this.#notifyCompletion(internal);
   }
 

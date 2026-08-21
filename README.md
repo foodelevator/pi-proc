@@ -1,28 +1,134 @@
 # pibg
 
-A distributable multi-file [Pi](https://pi.dev) extension package for managing background processes.
+A distributable [Pi](https://pi.dev) extension for managed background processes on macOS and Linux.
 
-The current implementation provides the POSIX process-management core, combined output store, and a Pi-compatible managed-process `bash` override. Wait mode remains the default: it streams combined stdout/stderr through throttled updates, preserves Pi's tail truncation and spill metadata, and reports timeout, cancellation, and failures as errored tool calls.
+`pibg` overrides `bash` without changing its default behavior. Normal calls still use `mode: "wait"`, stream combined stdout/stderr, and preserve Pi-style tail truncation and spill files. Detached modes return stable IDs (`p1`, `p2`, …) for later reads, writes, signals, and listing.
 
-`mode: "background"` and `mode: "monitor"` start a retained managed process and immediately return a stable `pN` process descriptor. Both modes retain output and completion state and continue enforcing optional timeouts after the tool returns. Use `process_read` for cursor-based combined stdout/stderr reads, `process_write` for exact stdin data and EOF, `process_kill` for process-group signals, and `process_list` for active or retained completed records. Detached modes are available only in TUI and RPC sessions, while print and JSON sessions remain wait-only.
+## Load it
 
-A global fixed 200 ms scheduler automatically sends visible process-event messages. Every detached process notifies on completion, while monitor processes additionally notify on stdout activity. Events from all processes coalesce globally; monitor notifications include all combined unread stdout/stderr, and busy-agent batches steer exactly once after `turn_end`. Notification output is fairly bounded to 50 KB/2000 lines in aggregate with byte ranges and spill paths retained in structured details.
+Install dependencies and load the package directly while developing:
 
-Interactive and RPC steering input promotes every active wait-mode command to a managed background process without cancelling it. The detached tool result identifies the steering reason, includes combined output produced so far with byte-range metadata, and advances that process's delivery cursor. Follow-up and extension-injected input do not detach waits.
+```sh
+npm install
+pi -e .
+```
 
-Session shutdown suppresses notifications, persists a non-LLM runtime-ending entry, sends TERM to every active group, waits 500 ms, then KILLs survivors while retaining spill files. Reloaded and resumed sessions reconstruct historical tombstones and monotonic IDs from durable process entries; `process_list` includes them only with `include_completed`, while direct operations return a prior-runtime error. Tree navigation leaves the live runtime untouched. The running-process widget remains later-stage work.
+The package entry point is declared in `package.json`, so it can also be installed or configured as a normal Pi package.
 
-Only macOS and Linux are supported. Shell-level detachment (`&`, `nohup`, and daemonization) is unsupported because inherited pipe and lifecycle ownership become ambiguous; use the process mode exposed by the extension instead.
+## Usage
+
+### Wait (default)
+
+```json
+{"command":"npm test"}
+```
+
+A steering message entered while one or more wait commands are running promotes every active wait to managed background mode instead of cancelling it.
+
+### Background
+
+```json
+{"command":"npm run dev","mode":"background"}
+```
+
+Returns immediately with a process descriptor such as `p1`. Background processes wake Pi when they complete.
+
+### Monitor
+
+```json
+{"command":"npm test -- --watch","mode":"monitor","timeout":3600}
+```
+
+Monitor mode also batches stdout activity into process notifications. Any unread stderr is included when stdout or completion triggers a batch.
+
+Detached modes are available in TUI and RPC sessions. Print and JSON sessions intentionally remain wait-only.
+
+### Manage a detached process
+
+```jsonc
+// Consume unread combined stdout/stderr and advance its cursor
+{"id":"p1"}                         // process_read
+
+// Recover an explicit byte range without moving the cursor
+{"id":"p1","start":0,"length":4096} // process_read
+
+// Write exact stdin data; no newline is added
+{"id":"p1","data":"yes\n"}          // process_write
+
+// Write and then send EOF
+{"id":"p1","data":"payload","close":true} // process_write
+
+// Graceful process-group termination (SIGTERM by default)
+{"id":"p1"}                         // process_kill
+
+// Explicit force termination; there is no automatic escalation
+{"id":"p1","signal":"SIGKILL"}      // process_kill
+
+// Active processes only
+{}                                    // process_list
+
+// Include completed records and prior-runtime tombstones
+{"include_completed":true}            // process_list
+```
+
+Shell-level detachment (`&`, `nohup`, and daemonization) is unsupported because inherited pipes and lifecycle ownership become ambiguous. Use `mode: "background"` or `mode: "monitor"` instead.
+
+## TUI
+
+While detached processes are running, a compact namespaced widget appears above the editor:
+
+```text
+● p2  monitor      12s  npm test -- --watch
+● p3  background    4s  bun run dev
+────────────────────────────────────────────
+> Type your message…
+```
+
+The widget:
+
+- is installed only in TUI mode;
+- stays hidden when no detached process is active;
+- excludes ordinary waits, completed records, and historical tombstones;
+- normalizes multi-line commands and ANSI-safely truncates every row to terminal width;
+- refreshes elapsed seconds once per second only while visible;
+- is removed, along with its timer and listeners, on shutdown, replacement, or reload;
+- uses the `pibg:running-processes` key so other extensions' widgets are preserved.
+
+Process notifications and tool rows are compact when collapsed. Use Pi's normal tool/message expansion action to show output, byte ranges, exit status, omitted ranges, spill paths, and full process-list details.
+
+Collapsed notification:
+
+```text
+✓ p2 stdout+completed · exit 0  │  ● p3 stdout · running
+```
+
+Expanded notification:
+
+```text
+✓ p2 monitor · completed; exit code 0
+events stdout+completed · 12s · PID 43120
+command npm test -- --watch
+exit 0
+output 1842 bytes/38 lines; requested [0, 1842); returned [0, 1842); omitted none
+output
+… combined stdout/stderr …
+```
+
+## Behavior and limits
+
+- One global fixed 200 ms window batches events from all processes.
+- Every detached process reports completion; monitor processes additionally report stdout activity.
+- Busy-agent batches are retained and delivered once after the turn settles.
+- Notification output is fairly bounded to 50 KB/2000 lines in aggregate.
+- Combined output spills after 50 KB or 2000 lines; spill files are retained.
+- Optional timeouts continue after detached tool calls return and terminate the process group with `SIGKILL`.
+- Session shutdown suppresses notifications, persists runtime metadata, sends `SIGTERM` to active groups, waits 500 ms, then sends `SIGKILL` to survivors.
+- Reloaded and resumed sessions reconstruct monotonic IDs and historical tombstones. `/tree` navigation leaves the live runtime untouched.
 
 ## Development
 
 ```sh
-npm install
 npm run check
 ```
 
-Load the package directly while developing:
-
-```sh
-pi -e .
-```
+Automated coverage includes component width/invalidation checks, widget timer and disposal lifecycle, renderer collapse/expansion behavior, extension discovery, and real Pi TUI/RPC registration probes. Manual tmux testing is intentionally reserved for the dedicated manual-testing step.

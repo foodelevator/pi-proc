@@ -24,6 +24,7 @@ describe("extension loading", () => {
       },
       model: { provider: "test-provider", id: "test-model" },
       thinkingLevel: "high",
+      ui: { setWidget() {} },
     } as unknown as ExtensionContext;
     let extension: Awaited<
       ReturnType<typeof discoverAndLoadExtensions>

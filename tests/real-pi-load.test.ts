@@ -11,12 +11,16 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   type AgentToolResult,
+  type ExtensionUIContext,
   SessionManager,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 
 import { PROCESS_NOTIFICATION_MESSAGE_TYPE } from "../background-processes/notification-scheduler";
 import { PROCESS_RUNTIME_END_ENTRY_TYPE } from "../background-processes/persistence";
+import { RUNNING_PROCESSES_WIDGET_KEY } from "../background-processes/ui";
 import type {
   ProcessKillToolDetails,
   ProcessKillToolInput,
@@ -50,6 +54,114 @@ async function waitUntil(
 }
 
 describe("real Pi runtime loading", () => {
+  it("registers and disposes the namespaced widget through real Pi TUI bindings", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pibg-real-widget-cwd-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "pibg-real-widget-agent-"));
+    const loader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      additionalExtensionPaths: [process.cwd()],
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+    let session: Awaited<ReturnType<typeof createAgentSession>>["session"]
+      | undefined;
+    let started = false;
+
+    try {
+      await loader.reload();
+      const created = await createAgentSession({
+        cwd,
+        agentDir,
+        resourceLoader: loader,
+        sessionManager: SessionManager.inMemory(cwd),
+        tools: ["bash", "process_kill"],
+      });
+      session = created.session;
+      const baseUI = session.extensionRunner.getUIContext();
+      const widgetCalls: Array<{
+        key: string;
+        content: unknown;
+        options: unknown;
+      }> = [];
+      const probeTheme = {
+        fg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as Theme;
+      const uiContext = {
+        ...baseUI,
+        theme: probeTheme,
+        setWidget(key: string, content: unknown, options?: unknown) {
+          widgetCalls.push({ key, content, options });
+        },
+      } as ExtensionUIContext;
+      await session.bindExtensions({ mode: "tui", uiContext });
+      started = true;
+      expect(widgetCalls).toEqual([]);
+
+      const bash = session.state.tools.find((tool) => tool.name === "bash");
+      if (bash === undefined) throw new Error("Managed bash tool was not active");
+      await bash.execute("real-widget-process", {
+        command: "sleep 30",
+        mode: "background",
+      });
+
+      expect(widgetCalls).toHaveLength(1);
+      expect(widgetCalls[0]).toMatchObject({
+        key: RUNNING_PROCESSES_WIDGET_KEY,
+        options: { placement: "aboveEditor" },
+      });
+      const factory = widgetCalls[0]?.content;
+      if (typeof factory !== "function") throw new Error("Expected widget factory");
+      const component = (factory as (
+        tui: { requestRender(): void },
+        theme: ExtensionUIContext["theme"],
+      ) => Component)({ requestRender() {} }, uiContext.theme);
+      const lines = component.render(50);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain("p1");
+      expect(lines[0]).toContain("background");
+
+      const processKill = session.state.tools.find(
+        (tool) => tool.name === "process_kill",
+      );
+      if (processKill === undefined) throw new Error("Process kill tool was not active");
+      await processKill.execute("real-widget-kill", {
+        id: "p1",
+        signal: "SIGKILL",
+      });
+      expect(widgetCalls.at(-1)).toMatchObject({
+        key: RUNNING_PROCESSES_WIDGET_KEY,
+        content: undefined,
+      });
+
+      await session.extensionRunner.emit({
+        type: "session_shutdown",
+        reason: "reload",
+      });
+      started = false;
+      expect(widgetCalls.at(-1)).toMatchObject({
+        key: RUNNING_PROCESSES_WIDGET_KEY,
+        content: undefined,
+      });
+    } finally {
+      try {
+        if (started) {
+          await session?.extensionRunner.emit({
+            type: "session_shutdown",
+            reason: "quit",
+          });
+        }
+      } finally {
+        session?.dispose();
+        rmSync(cwd, { recursive: true, force: true });
+        rmSync(agentDir, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("loads and executes detached RPC mode through AgentSession tool precedence", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "pibg-real-load-cwd-"));
     const agentDir = mkdtempSync(join(tmpdir(), "pibg-real-load-agent-"));

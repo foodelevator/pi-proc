@@ -5,6 +5,7 @@ import {
 import { type Static, Type } from "typebox";
 
 import { ProcessStateError } from "../process-manager";
+import { renderProcessWriteCall, renderProcessWriteResult } from "../ui";
 import {
   formatProcessState,
   type ManagedProcessStatus,
@@ -59,6 +60,8 @@ export function createProcessWriteTool(
       "process_write does not add a newline; include \\n in data explicitly when submitting a line, and use close=true only when the process should receive EOF.",
     ],
     parameters: processWriteSchema,
+    renderCall: renderProcessWriteCall,
+    renderResult: renderProcessWriteResult,
 
     async execute(_toolCallId, params, signal) {
       if (signal?.aborted) throw new Error("Process write aborted");
