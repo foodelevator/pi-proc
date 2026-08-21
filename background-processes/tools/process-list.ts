@@ -6,9 +6,11 @@ import { type Static, Type } from "typebox";
 
 import {
   formatProcessState,
+  type HistoricalProcessStatus,
   type ManagedProcessStatus,
   type ProcessToolOptions,
   requireProcessManager,
+  snapshotHistoricalProcessStatus,
   snapshotProcessStatus,
 } from "./process-utils";
 
@@ -25,7 +27,7 @@ export type ProcessListToolInput = Static<typeof processListSchema>;
 
 export interface ProcessListToolDetails {
   includeCompleted: boolean;
-  processes: ManagedProcessStatus[];
+  processes: Array<ManagedProcessStatus | HistoricalProcessStatus>;
 }
 
 function formatDuration(durationMs: number): string {
@@ -44,7 +46,7 @@ export function createProcessListTool(
     name: "process_list",
     label: "Process List",
     description:
-      "List managed processes from the current runtime. By default returns active processes only; set include_completed=true to include retained completed processes. Each record includes command, mode, PID, timing, exit status, stdin state, output byte/line counts, delivery cursor, and spill path when present. Historical-runtime tombstones are not restored yet.",
+      "List managed processes. By default returns active processes only from this runtime; set include_completed=true to include retained completed processes and historical-runtime tombstones. Records preserve command, mode, timing, last status, shutdown reason, output counts, and spill path when known.",
     promptSnippet: "List active managed processes, optionally including completed ones",
     promptGuidelines: [
       "Use process_list to discover managed process IDs and status; pass include_completed=true only when completed-process history is relevant.",
@@ -58,15 +60,39 @@ export function createProcessListTool(
         const includeCompleted = params.include_completed ?? false;
         const records = includeCompleted ? manager.records : manager.activeRecords;
         const now = Date.now();
-        const processes = records.map((record) =>
-          snapshotProcessStatus(record, undefined, now)
-        );
+        const processes: Array<ManagedProcessStatus | HistoricalProcessStatus> = [
+          ...records.map((record) => snapshotProcessStatus(record, undefined, now)),
+          ...(includeCompleted
+            ? manager.historicalRecords.map(snapshotHistoricalProcessStatus)
+            : []),
+        ];
         const emptyText = includeCompleted
-          ? "No managed processes exist in this runtime."
+          ? "No current or historical managed processes exist."
           : "No active managed processes."
         const text = processes.length === 0
           ? emptyText
           : processes.map((processStatus) => {
+              if (processStatus.state === "historical") {
+                const output = processStatus.output;
+                const outputText = output.totalBytes === undefined
+                  && output.totalLines === undefined
+                  ? "output unknown"
+                  : `${output.totalBytes ?? "?"} bytes/${output.totalLines ?? "?"} lines`;
+                const spill = output.spillPath === undefined
+                  ? ""
+                  : `; spill ${output.spillPath}`;
+                const metadata = [
+                  processStatus.mode,
+                  processStatus.pid === undefined ? undefined : `PID ${processStatus.pid}`,
+                  processStatus.priorState === undefined
+                    ? undefined
+                    : `last ${processStatus.priorState}`,
+                ].filter((item): item is string => item !== undefined).join("  ");
+                const command = processStatus.command === undefined
+                  ? "(command unknown)"
+                  : singleLine(processStatus.command);
+                return `${processStatus.id}  historical${metadata === "" ? "" : `  ${metadata}`}  ${outputText}${spill}  ${command}\n  ${processStatus.reason}`;
+              }
               const output = processStatus.output;
               const spill = output.spillPath === undefined
                 ? ""

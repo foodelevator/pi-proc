@@ -533,9 +533,24 @@ describe("stdin, signals, and shutdown", () => {
       waitForOutput(stubborn, "stubborn-ready"),
     ]);
 
-    const result = await processes.shutdown();
+    const calls: Array<{ pid: number; signal: string | number | undefined }> = [];
+    const realKill = process.kill.bind(process);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid === -graceful.pid || pid === -stubborn.pid) {
+        calls.push({ pid, signal });
+      }
+      return realKill(pid, signal);
+    });
+    const result = await processes.shutdown().finally(() => {
+      killSpy.mockRestore();
+    });
     await Promise.all([graceful.completion, stubborn.completion]);
 
+    expect(calls.slice(0, 2)).toEqual(expect.arrayContaining([
+      { pid: -graceful.pid, signal: "SIGTERM" },
+      { pid: -stubborn.pid, signal: "SIGTERM" },
+    ]));
+    expect(calls.findIndex(({ signal }) => signal === "SIGKILL")).toBeGreaterThanOrEqual(2);
     expect(result.signaled).toEqual(
       expect.arrayContaining([graceful.pid, stubborn.pid]),
     );

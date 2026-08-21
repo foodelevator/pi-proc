@@ -473,12 +473,28 @@ describe("process_kill", () => {
 });
 
 describe("process_list", () => {
-  it("defaults to active records and optionally includes completed records", async () => {
+  it("defaults to active records and includes completed plus historical records only on request", async () => {
     const manager = makeManager();
     const { list } = tools(manager);
     const active = await manager.startManaged("sleep 30", { mode: "monitor" });
     const completed = await manager.startManaged("printf done");
     await completed.completion;
+    manager.registerHistoricalProcess({
+      id: "p20",
+      command: "old watcher",
+      mode: "monitor",
+      priorState: "running",
+      runtimeEnd: "graceful",
+      shutdownReason: "resume",
+      output: {
+        totalBytes: 42,
+        totalLines: 3,
+        spilled: true,
+        spillPath: "/tmp/old-watcher.log",
+      },
+      message:
+        "Process `p20` belonged to a previous runtime and was terminated during session replacement (resume).",
+    });
 
     const activeOnly = await list.execute("active", {});
     expect(activeOnly.details).toMatchObject({
@@ -492,6 +508,7 @@ describe("process_list", () => {
     expect(all.details.processes.map((process) => process.id)).toEqual([
       active.id,
       completed.id,
+      "p20",
     ]);
     const listedCompleted = all.details.processes.find(
       (process) => process.id === completed.id,
@@ -502,6 +519,16 @@ describe("process_list", () => {
       exitCode: 0,
     });
     expect(listedCompleted?.output.totalBytes).toBe(4);
+    expect(all.details.processes[2]).toMatchObject({
+      id: "p20",
+      state: "historical",
+      priorState: "running",
+      shutdownReason: "resume",
+      output: { spillPath: "/tmp/old-watcher.log" },
+    });
+    expect(textOf(all)).toContain("p20  historical  monitor");
+    expect(textOf(all)).toContain("terminated during session replacement (resume)");
+    expect(textOf(activeOnly)).not.toContain("p20");
 
     await manager.signalProcessAndWait(active.id, "SIGKILL");
     expect((await list.execute("empty-active", {})).details.processes).toEqual([]);

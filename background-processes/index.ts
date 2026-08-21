@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -7,6 +9,11 @@ import {
   ProcessNotificationScheduler,
   registerProcessNotificationRenderer,
 } from "./notification-scheduler";
+import {
+  createRuntimeEndingEntryData,
+  PROCESS_RUNTIME_END_ENTRY_TYPE,
+  reconstructProcessPersistence,
+} from "./persistence";
 import { ProcessManager } from "./process-manager";
 import { registerBashTool } from "./tools/bash";
 import { registerProcessKillTool } from "./tools/process-kill";
@@ -15,6 +22,20 @@ import { registerProcessReadTool } from "./tools/process-read";
 import { registerProcessWriteTool } from "./tools/process-write";
 
 export { OutputStore } from "./output-store";
+export {
+  createRuntimeEndingEntryData,
+  PROCESS_RUNTIME_END_ENTRY_TYPE,
+  PROCESS_RUNTIME_END_ENTRY_VERSION,
+  reconstructProcessPersistence,
+  snapshotPersistedProcess,
+} from "./persistence";
+export type {
+  PersistedManagedProcess,
+  PersistedProcessOutputMetadata,
+  ProcessPersistenceRecovery,
+  ProcessRuntimeEndingEntryData,
+  ProcessRuntimeShutdownReason,
+} from "./persistence";
 export {
   PROCESS_NOTIFICATION_MESSAGE_TYPE,
   PROCESS_NOTIFICATION_WINDOW_MS,
@@ -115,6 +136,7 @@ export type {
   ProcessWriteToolInput,
 } from "./tools/process-write";
 export type {
+  HistoricalProcessStatus,
   ManagedProcessOutputStatus,
   ManagedProcessStatus,
   ProcessToolOptions,
@@ -123,6 +145,7 @@ export type {
   ByteRange,
   ForegroundExecution,
   ForegroundWaitOutcome,
+  HistoricalProcessOutputMetadata,
   HistoricalProcessRecord,
   ManagedProcessRecord,
   OutputCursorMetadata,
@@ -144,6 +167,10 @@ export type {
   StartProcessOptions,
 } from "./types";
 
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
 function reportNotificationError(
   ctx: ExtensionContext,
   error: Error,
@@ -157,6 +184,26 @@ function reportNotificationError(
     } catch {
       // A stale UI and a closed stderr must not destabilize process cleanup.
     }
+  }
+}
+
+function hasSessionEntries(ctx: ExtensionContext): boolean {
+  return typeof (ctx.sessionManager as unknown as {
+    getEntries?: unknown;
+  }).getEntries === "function";
+}
+
+function sessionEntries(ctx: ExtensionContext): readonly unknown[] {
+  const getEntries = (ctx.sessionManager as unknown as {
+    getEntries?: () => readonly unknown[];
+  }).getEntries;
+  if (typeof getEntries !== "function") return [];
+  try {
+    const entries = getEntries.call(ctx.sessionManager);
+    return Array.isArray(entries) ? entries : [];
+  } catch {
+    // A malformed/legacy embedding must not prevent session startup.
+    return [];
   }
 }
 
@@ -193,6 +240,7 @@ export function createBackgroundProcessesExtension(
   return (pi) => {
     let manager: ProcessManager | undefined;
     let notifications: ProcessNotificationScheduler | undefined;
+    let runtimeId: string | undefined;
 
     registerProcessNotificationRenderer(pi);
 
@@ -222,10 +270,20 @@ export function createBackgroundProcessesExtension(
     });
 
     pi.on("session_start", async (_event, ctx) => {
+      const previous = manager;
+      const previousNotifications = notifications;
+      previousNotifications?.shutdown();
+      previous?.beginShutdown();
+
+      const recovery = reconstructProcessPersistence(sessionEntries(ctx));
       const next = createManager({
         cwd: ctx.cwd,
         sessionEnvironment: () => sessionEnvironment(ctx),
+        initialProcessNumber: recovery.nextProcessNumber,
       });
+      for (const historical of recovery.historical) {
+        next.registerHistoricalProcess(historical);
+      }
       const nextNotifications = new ProcessNotificationScheduler({
         eventSource: next,
         isIdle: () => ctx.isIdle(),
@@ -236,21 +294,69 @@ export function createBackgroundProcessesExtension(
           reportNotificationError(ctx, error);
         },
       });
-      const previous = manager;
-      const previousNotifications = notifications;
       manager = next;
       notifications = nextNotifications;
-      previousNotifications?.shutdown();
+      runtimeId = randomUUID();
       if (previous !== undefined) await previous.shutdown();
     });
 
-    pi.on("session_shutdown", async () => {
+    pi.on("session_shutdown", async (event, ctx) => {
       const current = manager;
       const currentNotifications = notifications;
+      const currentRuntimeId = runtimeId;
       manager = undefined;
       notifications = undefined;
+      runtimeId = undefined;
+
+      // No process event, retry timer, or stale session callback may run after
+      // persistence begins. /tree emits neither shutdown nor start and therefore
+      // intentionally leaves this runtime untouched.
       currentNotifications?.shutdown();
-      if (current !== undefined) await current.shutdown();
+      current?.beginShutdown();
+
+      let persistenceError: unknown;
+      if (
+        current !== undefined
+        && currentRuntimeId !== undefined
+        && hasSessionEntries(ctx)
+      ) {
+        const appendEntry = (pi as unknown as {
+          appendEntry?: ExtensionAPI["appendEntry"];
+        }).appendEntry;
+        if (typeof appendEntry === "function") {
+          try {
+            appendEntry.call(
+              pi,
+              PROCESS_RUNTIME_END_ENTRY_TYPE,
+              createRuntimeEndingEntryData(
+                currentRuntimeId,
+                event.reason,
+                current.records,
+                event.targetSessionFile === undefined
+                  ? {}
+                  : { targetSessionFile: event.targetSessionFile },
+              ),
+            );
+          } catch (error) {
+            persistenceError = error;
+          }
+        }
+      }
+
+      let shutdownError: unknown;
+      try {
+        if (current !== undefined) await current.shutdown();
+      } catch (error) {
+        shutdownError = error;
+      }
+      if (shutdownError !== undefined && persistenceError !== undefined) {
+        throw new AggregateError(
+          [persistenceError, shutdownError],
+          "Failed to persist and shut down managed processes",
+        );
+      }
+      if (shutdownError !== undefined) throw asError(shutdownError);
+      if (persistenceError !== undefined) throw asError(persistenceError);
     });
   };
 }

@@ -387,6 +387,7 @@ export class ProcessManager {
   readonly #historical = new Map<string, HistoricalProcessRecord>();
   #nextProcessNumber: number;
   #acceptingStarts = true;
+  #eventsSuppressed = false;
   #shutdownPromise: Promise<ProcessShutdownResult> | undefined;
 
   constructor(options: ProcessManagerOptions = {}) {
@@ -444,6 +445,7 @@ export class ProcessManager {
 
   /** Subscribe to public monitor activity and public process completion events. */
   subscribeEvents(listener: ProcessManagerEventListener): () => void {
+    if (this.#eventsSuppressed) return () => {};
     this.#eventListeners.add(listener);
     return () => {
       this.#eventListeners.delete(listener);
@@ -636,9 +638,6 @@ export class ProcessManager {
     if (match === null) return;
     const processNumber = Number(match[1]);
     if (!Number.isSafeInteger(processNumber)) return;
-    if (processNumber === Number.MAX_SAFE_INTEGER) {
-      throw new RangeError(`Historical process ID is too large: ${record.id}`);
-    }
     this.#nextProcessNumber = Math.max(
       this.#nextProcessNumber,
       processNumber + 1,
@@ -789,8 +788,24 @@ export class ProcessManager {
     });
   }
 
+  /** Stop starts, timeout timers, and public events before persisting teardown. */
+  beginShutdown(): void {
+    this.#acceptingStarts = false;
+    this.#eventsSuppressed = true;
+    this.#eventListeners.clear();
+    for (const execution of this.#activeExecutions()) {
+      if (execution.timeoutHandle !== undefined) {
+        clearTimeout(execution.timeoutHandle);
+        execution.timeoutHandle = undefined;
+      }
+    }
+  }
+
   shutdown(): Promise<ProcessShutdownResult> {
-    this.#shutdownPromise ??= this.#performShutdown();
+    if (this.#shutdownPromise === undefined) {
+      this.beginShutdown();
+      this.#shutdownPromise = this.#performShutdown();
+    }
     return this.#shutdownPromise;
   }
 
@@ -962,6 +977,16 @@ export class ProcessManager {
     internal: InternalProcess,
     mode: PublicProcessMode,
   ): ManagedProcessRecord {
+    while (
+      Number.isSafeInteger(this.#nextProcessNumber)
+      && (this.#records.has(`p${this.#nextProcessNumber}`)
+        || this.#historical.has(`p${this.#nextProcessNumber}`))
+    ) {
+      this.#nextProcessNumber++;
+    }
+    if (!Number.isSafeInteger(this.#nextProcessNumber)) {
+      throw new RangeError("Managed process ID space is exhausted");
+    }
     internal.id = `p${this.#nextProcessNumber++}`;
     internal.mode = mode;
     this.#records.set(internal.id, internal);
@@ -1021,6 +1046,7 @@ export class ProcessManager {
   }
 
   #emitEvent(event: ProcessManagerEvent): void {
+    if (this.#eventsSuppressed) return;
     for (const listener of [...this.#eventListeners]) {
       callSafely(this.#callbacks.onCallbackError, () => {
         listener(event);
@@ -1082,10 +1108,15 @@ export class ProcessManager {
   }
 
   async #performShutdown(): Promise<ProcessShutdownResult> {
-    this.#acceptingStarts = false;
     await Promise.allSettled([...this.#pendingStarts]);
 
     const active = this.#activeExecutions();
+    for (const execution of active) {
+      if (execution.timeoutHandle !== undefined) {
+        clearTimeout(execution.timeoutHandle);
+        execution.timeoutHandle = undefined;
+      }
+    }
     const signaled: number[] = [];
     const forceKilled: number[] = [];
     const signalFailures: ProcessShutdownSignalFailure[] = [];
@@ -1095,7 +1126,13 @@ export class ProcessManager {
         signaled.push(execution.pid);
       }
     }
-    await this.#waitForAll(active, this.#shutdownGraceMs);
+    // The grace period is deliberately fixed rather than completion-raced: all
+    // groups receive the same 500ms production TERM window before escalation.
+    if (active.length > 0 && this.#shutdownGraceMs > 0) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, this.#shutdownGraceMs);
+      });
+    }
 
     const survivors = active.filter(
       (execution) => execution.completedAt === undefined,

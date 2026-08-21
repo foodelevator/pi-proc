@@ -1,5 +1,6 @@
 import type { ProcessManager } from "../process-manager";
 import type {
+  HistoricalProcessRecord,
   ManagedProcessRecord,
   OutputReadResult,
 } from "../types";
@@ -28,6 +29,27 @@ export interface ManagedProcessStatus {
   stdinClosed: boolean;
   lastSignal?: NodeJS.Signals;
   output: ManagedProcessOutputStatus;
+}
+
+export interface HistoricalProcessStatus {
+  id: string;
+  state: "historical";
+  priorState?: "running" | "completed";
+  command?: string;
+  cwd?: string;
+  mode?: ManagedProcessRecord["mode"];
+  pid?: number;
+  startedAt?: number;
+  completedAt?: number;
+  exitCode?: number | null;
+  exitSignal?: NodeJS.Signals | null;
+  timedOut?: boolean;
+  stdinClosed?: boolean;
+  lastSignal?: NodeJS.Signals;
+  runtimeEnd: "graceful" | "unknown";
+  shutdownReason?: HistoricalProcessRecord["shutdownReason"];
+  reason: string;
+  output: NonNullable<HistoricalProcessRecord["output"]>;
 }
 
 export interface ProcessToolOptions {
@@ -136,6 +158,34 @@ export function snapshotProcessStatus(
       ? {}
       : { lastSignal: record.lastSignal }),
     output,
+  };
+}
+
+export function snapshotHistoricalProcessStatus(
+  record: HistoricalProcessRecord,
+): HistoricalProcessStatus {
+  return {
+    id: record.id,
+    state: "historical",
+    ...(record.priorState === undefined ? {} : { priorState: record.priorState }),
+    ...(record.command === undefined ? {} : { command: record.command }),
+    ...(record.cwd === undefined ? {} : { cwd: record.cwd }),
+    ...(record.mode === undefined ? {} : { mode: record.mode }),
+    ...(record.pid === undefined ? {} : { pid: record.pid }),
+    ...(record.startedAt === undefined ? {} : { startedAt: record.startedAt }),
+    ...(record.completedAt === undefined ? {} : { completedAt: record.completedAt }),
+    ...(record.exitCode === undefined ? {} : { exitCode: record.exitCode }),
+    ...(record.exitSignal === undefined ? {} : { exitSignal: record.exitSignal }),
+    ...(record.timedOut === undefined ? {} : { timedOut: record.timedOut }),
+    ...(record.stdinClosed === undefined ? {} : { stdinClosed: record.stdinClosed }),
+    ...(record.lastSignal === undefined ? {} : { lastSignal: record.lastSignal }),
+    runtimeEnd: record.runtimeEnd ?? "unknown",
+    ...(record.shutdownReason === undefined
+      ? {}
+      : { shutdownReason: record.shutdownReason }),
+    reason: record.message
+      ?? `Process \`${record.id}\` belonged to a previous runtime`,
+    output: record.output ?? { spilled: false },
   };
 }
 

@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 
+import { PROCESS_RUNTIME_END_ENTRY_TYPE } from "../background-processes/persistence";
 import type {
   ProcessKillToolDetails,
   ProcessKillToolInput,
@@ -385,6 +386,217 @@ describe("real Pi runtime loading", () => {
         },
         options: { triggerTurn: true, deliverAs: "steer" },
       });
+    } finally {
+      try {
+        await session?.extensionRunner.emit({
+          type: "session_shutdown",
+          reason: "quit",
+        });
+      } finally {
+        session?.dispose();
+        rmSync(cwd, { recursive: true, force: true });
+        rmSync(agentDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("persists and reconstructs across real reload/new lifecycle events", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pibg-real-lifecycle-cwd-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "pibg-real-lifecycle-agent-"));
+    const loader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      additionalExtensionPaths: [process.cwd()],
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+    const sessionManager = SessionManager.inMemory(cwd);
+    let session: Awaited<ReturnType<typeof createAgentSession>>["session"]
+      | undefined;
+    let runtimeStarted = false;
+
+    try {
+      await loader.reload();
+      const created = await createAgentSession({
+        cwd,
+        agentDir,
+        resourceLoader: loader,
+        sessionManager,
+        tools: ["bash", "process_read", "process_list"],
+      });
+      session = created.session;
+      await session.bindExtensions({ mode: "rpc" });
+      runtimeStarted = true;
+      const bash = session.state.tools.find((tool) => tool.name === "bash");
+      const processRead = session.state.tools.find(
+        (tool) => tool.name === "process_read",
+      ) as RuntimeTool<ProcessReadToolInput, ProcessReadToolDetails> | undefined;
+      const processList = session.state.tools.find(
+        (tool) => tool.name === "process_list",
+      ) as RuntimeTool<ProcessListToolInput, ProcessListToolDetails> | undefined;
+      if (bash === undefined || processRead === undefined || processList === undefined) {
+        throw new Error("Lifecycle tools were not active");
+      }
+
+      expect((await bash.execute("before-reload", {
+        command: "printf before-reload",
+        mode: "background",
+      })).details).toMatchObject({ process: { id: "p1" } });
+      await waitUntil(async () =>
+        (await processList.execute("wait-p1", { include_completed: true }))
+          .details.processes.some((process) =>
+            process.id === "p1" && process.state === "completed"
+          )
+      );
+
+      await session.extensionRunner.emit({
+        type: "session_shutdown",
+        reason: "reload",
+      });
+      runtimeStarted = false;
+      const endingEntry = sessionManager.getEntries().find((entry) =>
+        entry.type === "custom"
+        && entry.customType === PROCESS_RUNTIME_END_ENTRY_TYPE
+      );
+      expect(endingEntry).toMatchObject({
+        type: "custom",
+        customType: PROCESS_RUNTIME_END_ENTRY_TYPE,
+        data: {
+          reason: "reload",
+          processes: [{ id: "p1" }],
+        },
+      });
+
+      await session.extensionRunner.emit({
+        type: "session_start",
+        reason: "reload",
+      });
+      runtimeStarted = true;
+      await expect(processRead.execute("historical-p1", { id: "p1" }))
+        .rejects.toThrow("had already completed before reload");
+      expect((await processList.execute("list-reloaded", {
+        include_completed: true,
+      })).details.processes).toEqual([
+        expect.objectContaining({
+          id: "p1",
+          state: "historical",
+          shutdownReason: "reload",
+        }),
+      ]);
+      expect((await bash.execute("after-reload", {
+        command: "true",
+        mode: "background",
+      })).details).toMatchObject({ process: { id: "p2" } });
+
+      await session.extensionRunner.emit({
+        type: "session_shutdown",
+        reason: "new",
+      });
+      runtimeStarted = false;
+      sessionManager.newSession();
+      await session.extensionRunner.emit({
+        type: "session_start",
+        reason: "new",
+      });
+      runtimeStarted = true;
+      expect((await processList.execute("new-is-empty", {
+        include_completed: true,
+      })).details.processes).toEqual([]);
+      expect((await bash.execute("new-p1", {
+        command: "true",
+        mode: "background",
+      })).details).toMatchObject({ process: { id: "p1" } });
+    } finally {
+      try {
+        if (runtimeStarted) {
+          await session?.extensionRunner.emit({
+            type: "session_shutdown",
+            reason: "quit",
+          });
+        }
+      } finally {
+        session?.dispose();
+        rmSync(cwd, { recursive: true, force: true });
+        rmSync(agentDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("restores resume-like persisted history in a real extension runtime", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pibg-real-resume-cwd-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "pibg-real-resume-agent-"));
+    const loader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      additionalExtensionPaths: [process.cwd()],
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+    const sessionManager = SessionManager.inMemory(cwd);
+    sessionManager.appendCustomEntry(PROCESS_RUNTIME_END_ENTRY_TYPE, {
+      kind: "process-runtime-ending",
+      version: 1,
+      runtimeId: "prior-resumed-runtime",
+      endedAt: 100,
+      reason: "quit",
+      processes: [{
+        id: "p8",
+        command: "old watcher",
+        cwd,
+        mode: "monitor",
+        pid: 808,
+        startedAt: 10,
+        state: "running",
+        timedOut: false,
+        stdinClosed: false,
+        output: {
+          totalBytes: 9,
+          totalLines: 1,
+          deliveredCursor: 0,
+          spilled: true,
+          spillPath: "/tmp/old-watcher.log",
+        },
+      }],
+    });
+    let session: Awaited<ReturnType<typeof createAgentSession>>["session"]
+      | undefined;
+
+    try {
+      await loader.reload();
+      const created = await createAgentSession({
+        cwd,
+        agentDir,
+        resourceLoader: loader,
+        sessionManager,
+        tools: ["bash", "process_list"],
+      });
+      session = created.session;
+      await session.bindExtensions({ mode: "rpc" });
+      const bash = session.state.tools.find((tool) => tool.name === "bash");
+      const processList = session.state.tools.find(
+        (tool) => tool.name === "process_list",
+      ) as RuntimeTool<ProcessListToolInput, ProcessListToolDetails> | undefined;
+      if (bash === undefined || processList === undefined) {
+        throw new Error("Resume-like tools were not active");
+      }
+
+      expect((await processList.execute("resumed-history", {
+        include_completed: true,
+      })).details.processes).toMatchObject([{
+        id: "p8",
+        state: "historical",
+        priorState: "running",
+        shutdownReason: "quit",
+        output: { spillPath: "/tmp/old-watcher.log" },
+      }]);
+      expect((await bash.execute("resumed-next", {
+        command: "true",
+        mode: "background",
+      })).details).toMatchObject({ process: { id: "p9" } });
     } finally {
       try {
         await session?.extensionRunner.emit({

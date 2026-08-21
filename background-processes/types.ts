@@ -132,9 +132,33 @@ export interface ManagedProcessRecord extends ProcessExecution {
   mode: PublicProcessMode;
 }
 
+export interface HistoricalProcessOutputMetadata {
+  totalBytes?: number;
+  totalLines?: number;
+  deliveredCursor?: number;
+  spilled: boolean;
+  spillPath?: string;
+}
+
+/** Durable metadata only; historical output stores are never reopened. */
 export interface HistoricalProcessRecord {
   id: string;
   command?: string;
+  cwd?: string;
+  mode?: PublicProcessMode;
+  pid?: number;
+  startedAt?: number;
+  completedAt?: number;
+  exitCode?: number | null;
+  exitSignal?: NodeJS.Signals | null;
+  timedOut?: boolean;
+  stdinClosed?: boolean;
+  lastSignal?: NodeJS.Signals;
+  /** State captured by the latest durable record in the prior runtime. */
+  priorState?: "running" | "completed";
+  runtimeEnd?: "graceful" | "unknown";
+  shutdownReason?: "quit" | "reload" | "new" | "resume" | "fork";
+  output?: HistoricalProcessOutputMetadata;
   message?: string;
 }
 
