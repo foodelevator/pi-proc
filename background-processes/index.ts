@@ -57,6 +57,7 @@ export type {
 export type {
   ByteRange,
   ForegroundExecution,
+  ForegroundWaitOutcome,
   HistoricalProcessRecord,
   ManagedProcessRecord,
   OutputCursorMetadata,
@@ -112,6 +113,16 @@ export function createBackgroundProcessesExtension(
     let manager: ProcessManager | undefined;
 
     registerBashTool(pi, { getManager: () => manager });
+
+    pi.on("input", (event) => {
+      if (
+        event.streamingBehavior === "steer"
+        && (event.source === "interactive" || event.source === "rpc")
+      ) {
+        manager?.detachAllForeground();
+      }
+      return { action: "continue" };
+    });
 
     pi.on("session_start", async (_event, ctx) => {
       const next = createManager({

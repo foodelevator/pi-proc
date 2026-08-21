@@ -312,6 +312,89 @@ describe("managed bash execution", () => {
   });
 });
 
+describe("steering-detached wait execution", () => {
+  it("returns output so far, advances its cursor, and ignores later tool abort", async () => {
+    const manager = makeManager();
+    const controller = new AbortController();
+    const completionEvents: string[] = [];
+    manager.subscribeEvents((event) => {
+      if (event.type === "completed") completionEvents.push(event.process.id);
+    });
+
+    const running = execute(
+      manager,
+      { command: "printf ready; read ignored; printf later" },
+      controller.signal,
+    );
+    await waitUntil(() => {
+      const foreground = manager.foregroundExecutions[0];
+      return foreground?.outputStore.readRange(0).content === "ready";
+    });
+
+    const [record] = manager.detachAllForeground();
+    if (record === undefined) throw new Error("Expected detached process");
+    controller.abort();
+    const result = await running;
+
+    expect(result.details?.process).toMatchObject({
+      kind: "started",
+      reason: "detached_by_steering",
+      id: "p1",
+      mode: "background",
+    });
+    expect(result.details?.output).toMatchObject({
+      content: "ready",
+      requestedRange: { start: 0, end: 5 },
+      returnedRange: { start: 0, end: 5 },
+      omittedRanges: [],
+      cursor: { before: 0, after: 5, advanced: true },
+      totalBytes: 5,
+    });
+    expect(result.content).toEqual([{
+      type: "text",
+      text:
+        `Detached foreground command as background process \`p1\` (PID ${record.pid}) due to steering.\n\nOutput so far:\nready`,
+    }]);
+    expect(record.outputStore.deliveredCursor).toBe(5);
+    expect(record.completedAt).toBeUndefined();
+    expect(() => process.kill(-record.pid, 0)).not.toThrow();
+
+    await manager.writeProcess(record.id, "release\n", true);
+    await record.completion;
+    expect(record.outputStore.readImplicit().content).toBe("later");
+    expect(completionEvents).toEqual(["p1"]);
+    expect(manager.foregroundExecutions).toEqual([]);
+    expect(manager.records).toEqual([record]);
+  });
+
+  it("keeps the original timeout active after steering returns", async () => {
+    const manager = makeManager();
+    const running = execute(manager, {
+      command: "printf ready; sleep 30",
+      timeout: 0.15,
+    });
+    await waitUntil(() =>
+      manager.foregroundExecutions[0]?.outputStore.readRange(0).content
+        === "ready"
+    );
+
+    const [record] = manager.detachAllForeground();
+    if (record === undefined) throw new Error("Expected detached process");
+    const result = await running;
+
+    expect(result.details?.process).toMatchObject({
+      reason: "detached_by_steering",
+      timeoutSeconds: 0.15,
+    });
+    expect(record.completedAt).toBeUndefined();
+    expect(await record.completion).toMatchObject({
+      timedOut: true,
+      exitSignal: "SIGKILL",
+    });
+    expect(record.lastSignal).toBe("SIGKILL");
+  });
+});
+
 describe("wait-compatible bash execution", () => {
   it("defaults to a private wait and returns Pi's successful result shape", async () => {
     const manager = makeManager();

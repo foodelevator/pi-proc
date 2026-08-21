@@ -16,6 +16,7 @@ import type { ProcessManager } from "../process-manager";
 import type {
   ForegroundExecution,
   ManagedProcessRecord,
+  OutputReadResult,
   PublicProcessMode,
 } from "../types";
 
@@ -43,6 +44,8 @@ export type BackgroundBashToolInput = Static<typeof bashSchema>;
 
 export interface BashProcessDescriptor {
   kind: "started";
+  /** Present when a wait was converted to background by a steering message. */
+  reason?: "detached_by_steering";
   id: string;
   mode: PublicProcessMode;
   command: string;
@@ -55,6 +58,8 @@ export interface BashProcessDescriptor {
 /** Details remain compatible with Pi's built-in bash renderer and persistence. */
 export interface BackgroundBashToolDetails extends BashToolDetails {
   process?: BashProcessDescriptor;
+  /** Combined stdout/stderr unread when a foreground wait was detached. */
+  output?: OutputReadResult;
 }
 
 export interface BashToolOptions {
@@ -150,15 +155,14 @@ function appendStatus(text: string, status: string): string {
   return `${text ? `${text}\n\n` : ""}${status}`;
 }
 
-function startedProcessResult(
+function processDescriptor(
   record: ManagedProcessRecord,
   timeoutSeconds: number | undefined,
-): {
-  content: [{ type: "text"; text: string }];
-  details: BackgroundBashToolDetails;
-} {
-  const descriptor: BashProcessDescriptor = {
+  reason?: "detached_by_steering",
+): BashProcessDescriptor {
+  return {
     kind: "started",
+    ...(reason === undefined ? {} : { reason }),
     id: record.id,
     mode: record.mode,
     command: record.command,
@@ -167,6 +171,15 @@ function startedProcessResult(
     startedAt: record.startedAt,
     ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
   };
+}
+
+function startedProcessResult(
+  record: ManagedProcessRecord,
+  timeoutSeconds: number | undefined,
+): {
+  content: [{ type: "text"; text: string }];
+  details: BackgroundBashToolDetails;
+} {
   const timeoutText = timeoutSeconds === undefined
     ? ""
     : ` Timeout: ${timeoutSeconds} seconds.`;
@@ -176,7 +189,41 @@ function startedProcessResult(
       text:
         `Started ${record.mode} process \`${record.id}\` (PID ${record.pid}).${timeoutText}`,
     }],
-    details: { process: descriptor },
+    details: { process: processDescriptor(record, timeoutSeconds) },
+  };
+}
+
+function detachedProcessResult(
+  record: ManagedProcessRecord,
+  timeoutSeconds: number | undefined,
+  output: OutputReadResult,
+): {
+  content: [{ type: "text"; text: string }];
+  details: BackgroundBashToolDetails;
+} {
+  const timeoutText = timeoutSeconds === undefined
+    ? ""
+    : ` Timeout remains active at ${timeoutSeconds} seconds.`;
+  const outputText = output.content.length === 0
+    ? ""
+    : `\n\nOutput so far:\n${output.content}`;
+  const omittedText = output.omittedRanges.length === 0
+    ? ""
+    : `\n\n[Showing combined output bytes ${output.returnedRange.start}-${output.returnedRange.end} of ${output.totalBytes}; omitted ${output.truncation.omittedBytes} earlier bytes.]`;
+  return {
+    content: [{
+      type: "text",
+      text:
+        `Detached foreground command as background process \`${record.id}\` (PID ${record.pid}) due to steering.${timeoutText}${outputText}${omittedText}`,
+    }],
+    details: {
+      process: processDescriptor(
+        record,
+        timeoutSeconds,
+        "detached_by_steering",
+      ),
+      output,
+    },
   };
 }
 
@@ -192,7 +239,7 @@ export function createBashTool(
   return {
     name: "bash",
     label: "bash",
-    description: `Execute a bash command in the current working directory. Mode defaults to wait. Wait returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first), and streams updates. Background and monitor start a managed process and return its process ID immediately; monitor is reserved for future stdout-triggered reporting. This release retains detached output and completion internally but does not yet expose process reporting or management tools. Background and monitor require TUI or RPC mode. If wait output is truncated, full output is saved to a temp file. Optional timeouts apply in every mode. Shell-level &, nohup, and daemonization are unsupported; use mode instead.`,
+    description: `Execute a bash command in the current working directory. Mode defaults to wait. Wait returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first), and streams updates. Interactive or RPC steering converts every active wait to a managed background process and returns its output so far without cancelling it. Background and monitor start a managed process and return its process ID immediately; monitor is reserved for future stdout-triggered reporting. This release retains detached output and completion internally but does not yet expose process reporting or management tools. Background and monitor require TUI or RPC mode. If wait output is truncated, full output is saved to a temp file. Optional timeouts apply in every mode. Shell-level &, nohup, and daemonization are unsupported; use mode instead.`,
     promptSnippet: "Execute bash commands (ls, grep, find, etc.)",
     promptGuidelines: [
       "You can inspect PI_* environment variables for current model and session details.",
@@ -230,7 +277,8 @@ export function createBashTool(
       let updateTimer: NodeJS.Timeout | undefined;
       let updateDirty = false;
       let lastUpdateAt = 0;
-      let aborted = false;
+      let abortRequested = false;
+      let abortListenerAttached = false;
       let abortSignalError: Error | undefined;
 
       const emitOutputUpdate = (): void => {
@@ -260,11 +308,16 @@ export function createBashTool(
           emitOutputUpdate();
         }, delay);
       };
+      const removeAbortListener = (): void => {
+        if (!abortListenerAttached) return;
+        signal?.removeEventListener("abort", handleAbort);
+        abortListenerAttached = false;
+      };
       const handleAbort = (): void => {
-        aborted = true;
-        if (execution === undefined || execution.completedAt !== undefined) return;
+        abortRequested = true;
+        if (execution === undefined) return;
         try {
-          manager.signalExecution(execution, "SIGKILL");
+          manager.abortForeground(execution);
         } catch (error) {
           abortSignalError = error instanceof Error
             ? error
@@ -274,6 +327,7 @@ export function createBashTool(
 
       onUpdate?.({ content: [], details: undefined });
       signal?.addEventListener("abort", handleAbort, { once: true });
+      abortListenerAttached = signal !== undefined;
 
       try {
         execution = await manager.startForeground(params.command, {
@@ -284,9 +338,27 @@ export function createBashTool(
           scheduleOutputUpdate,
         );
         if (execution.outputStore.totalBytes > 0) scheduleOutputUpdate();
-        if (signal?.aborted || aborted) handleAbort();
+        if (signal?.aborted || abortRequested) handleAbort();
 
-        const completion = await execution.completion;
+        const outcome = await execution.waitOutcome;
+        if (outcome.type === "detached") {
+          // Promotion wins atomically in the manager. Disable the tool's signal
+          // before yielding the detached result so later agent abort cannot kill it.
+          removeAbortListener();
+          unsubscribeOutput?.();
+          unsubscribeOutput = undefined;
+          clearUpdateTimer();
+          emitOutputUpdate();
+          return detachedProcessResult(
+            outcome.process,
+            params.timeout,
+            outcome.process.outputStore.readImplicit(),
+          );
+        }
+
+        const completion = outcome.type === "completed"
+          ? outcome.completion
+          : await execution.completion;
         clearUpdateTimer();
         emitOutputUpdate();
         const snapshot = snapshotOutput(execution.outputStore);
@@ -295,13 +367,13 @@ export function createBashTool(
           snapshot,
         );
 
-        if (signal?.aborted || aborted) {
+        if (outcome.type === "aborted") {
           const message = abortSignalError === undefined
             ? "Command aborted"
             : `Command aborted (${abortSignalError.message})`;
           throw new Error(appendStatus(outputText === "(no output)" ? "" : outputText, message));
         }
-        if (completion.timedOut) {
+        if (outcome.type === "timed-out" || completion.timedOut) {
           throw new Error(
             appendStatus(
               outputText === "(no output)" ? "" : outputText,
@@ -325,7 +397,7 @@ export function createBashTool(
         }
         return { content: [{ type: "text", text: outputText }], details };
       } finally {
-        signal?.removeEventListener("abort", handleAbort);
+        removeAbortListener();
         unsubscribeOutput?.();
         clearUpdateTimer();
       }

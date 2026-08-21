@@ -114,9 +114,17 @@ export interface ProcessExecution {
 }
 
 /** A wait-mode execution, private to its caller unless it is promoted. */
+export type ForegroundWaitOutcome =
+  | { type: "completed"; completion: ProcessCompletion }
+  | { type: "detached"; process: ManagedProcessRecord }
+  | { type: "aborted" }
+  | { type: "timed-out" };
+
 export interface ForegroundExecution extends ProcessExecution {
   /** Resolves if steering promotes this execution; otherwise remains pending. */
   detachment: Promise<ManagedProcessRecord>;
+  /** The single winning reason why the foreground tool should stop waiting. */
+  waitOutcome: Promise<ForegroundWaitOutcome>;
 }
 
 export interface ManagedProcessRecord extends ProcessExecution {

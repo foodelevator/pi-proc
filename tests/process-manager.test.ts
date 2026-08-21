@@ -261,6 +261,15 @@ describe("ProcessManager lifecycle", () => {
     expect(detached.every((record) => record.mode === "background")).toBe(true);
     expect(await first.detachment).toBe(detached[0]);
     expect(await second.detachment).toBe(detached[1]);
+    expect(await first.waitOutcome).toEqual({
+      type: "detached",
+      process: detached[0],
+    });
+    expect(await second.waitOutcome).toEqual({
+      type: "detached",
+      process: detached[1],
+    });
+    expect(processes.detachAllForeground()).toEqual([]);
     expect(processes.foregroundExecutions).toHaveLength(0);
 
     await Promise.all(detached.map(async (record) => {
@@ -271,7 +280,13 @@ describe("ProcessManager lifecycle", () => {
   it("returns successful and failing shell exit status and forgets completed waits", async () => {
     const processes = manager();
     const success = await processes.startForeground("printf ok");
-    expect(await success.completion).toMatchObject({ exitCode: 0, timedOut: false });
+    const successCompletion = await success.completion;
+    expect(successCompletion).toMatchObject({ exitCode: 0, timedOut: false });
+    expect(await success.waitOutcome).toEqual({
+      type: "completed",
+      completion: successCompletion,
+    });
+    expect(processes.detachAllForeground()).toEqual([]);
     expect(success.outputStore.readRange(0).content).toBe("ok");
 
     const failure = await processes.startForeground("printf bad >&2; exit 7");
@@ -343,6 +358,25 @@ describe("ProcessManager lifecycle", () => {
     expect(completion).toMatchObject({ timedOut: true, exitSignal: "SIGKILL" });
     expect(record.timedOut).toBe(true);
     expect(record.lastSignal).toBe("SIGKILL");
+  });
+
+  it("arbitrates timeout and abort against detachment exactly once", async () => {
+    const processes = manager();
+    const timed = await processes.startForeground("sleep 30", { timeoutMs: 30 });
+
+    expect(await timed.waitOutcome).toEqual({ type: "timed-out" });
+    expect(processes.detachAllForeground()).toEqual([]);
+    expect((await timed.completion).timedOut).toBe(true);
+
+    const aborted = await processes.startForeground("sleep 30");
+    expect(processes.abortForeground(aborted)).toBe(true);
+    expect(processes.abortForeground(aborted)).toBe(false);
+    expect(await aborted.waitOutcome).toEqual({ type: "aborted" });
+    expect(processes.detachAllForeground()).toEqual([]);
+    await aborted.completion;
+
+    expect(processes.foregroundExecutions).toEqual([]);
+    expect(processes.records).toEqual([]);
   });
 });
 

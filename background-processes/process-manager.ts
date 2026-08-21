@@ -14,6 +14,7 @@ import {
 } from "./shell";
 import type {
   ForegroundExecution,
+  ForegroundWaitOutcome,
   HistoricalProcessRecord,
   ManagedProcessRecord,
   PiSessionEnvironment,
@@ -157,12 +158,23 @@ interface Deferred<T> {
   resolve: (value: T) => void;
 }
 
+type ForegroundState =
+  | "waiting"
+  | "detached"
+  | "aborted"
+  | "timed-out"
+  | "completed"
+  | "not-foreground";
+
 interface InternalProcess extends ProcessExecution {
   id?: string;
   mode: ProcessMode;
   child: ChildProcessWithoutNullStreams;
   detachment: Promise<ManagedProcessRecord>;
   resolveDetachment: (record: ManagedProcessRecord) => void;
+  waitOutcome: Promise<ForegroundWaitOutcome>;
+  resolveWaitOutcome: (outcome: ForegroundWaitOutcome) => void;
+  foregroundState: ForegroundState;
   resolveCompletion: (completion: ProcessCompletion) => void;
   timeoutHandle?: NodeJS.Timeout;
   stdinQueue: Promise<void>;
@@ -514,13 +526,19 @@ export class ProcessManager {
         "Execution is not owned by this manager",
       );
     }
-    if (internal.completedAt !== undefined) {
+    if (
+      internal.foregroundState === "completed"
+      || internal.completedAt !== undefined
+    ) {
       throw new ProcessStateError(
         "completed",
         "Cannot detach a completed foreground process",
       );
     }
-    if (!this.#foreground.has(internal)) {
+    if (
+      internal.foregroundState !== "waiting"
+      || !this.#foreground.has(internal)
+    ) {
       throw new ProcessStateError(
         "not-foreground",
         "Execution is not an active foreground process",
@@ -528,8 +546,10 @@ export class ProcessManager {
     }
 
     this.#foreground.delete(internal);
+    internal.foregroundState = "detached";
     const record = this.#makePublic(internal, mode);
     internal.resolveDetachment(record);
+    internal.resolveWaitOutcome({ type: "detached", process: record });
     callSafely(this.#callbacks.onCallbackError, () => {
       this.#callbacks.onPromoted?.(record);
     });
@@ -539,13 +559,31 @@ export class ProcessManager {
   detachAllForeground(): ManagedProcessRecord[] {
     const detached: ManagedProcessRecord[] = [];
     for (const execution of [...this.#foreground]) {
-      if (execution.completedAt === undefined) {
+      if (execution.foregroundState === "waiting") {
         detached.push(
           this.promoteForeground(execution as ForegroundExecution),
         );
       }
     }
     return detached;
+  }
+
+  /** Atomically make an active wait non-detachable and kill its process group. */
+  abortForeground(execution: ForegroundExecution): boolean {
+    const internal = execution as InternalProcess;
+    if (!this.#owned.has(execution)) {
+      throw new ProcessStateError(
+        "not-foreground",
+        "Execution is not owned by this manager",
+      );
+    }
+    if (internal.foregroundState !== "waiting") return false;
+
+    this.#foreground.delete(internal);
+    internal.foregroundState = "aborted";
+    internal.resolveWaitOutcome({ type: "aborted" });
+    this.signalExecution(internal, "SIGKILL");
+    return true;
   }
 
   getProcess(id: string): ManagedProcessRecord {
@@ -739,6 +777,7 @@ export class ProcessManager {
     const outputStore = this.#outputStoreFactory();
     const completionDeferred = deferred<ProcessCompletion>();
     const detachmentDeferred = deferred<ManagedProcessRecord>();
+    const waitOutcomeDeferred = deferred<ForegroundWaitOutcome>();
     const processHolder: { current?: InternalProcess } = {};
 
     let shell;
@@ -796,6 +835,9 @@ export class ProcessManager {
       completion: completionDeferred.promise,
       detachment: detachmentDeferred.promise,
       resolveDetachment: detachmentDeferred.resolve,
+      waitOutcome: waitOutcomeDeferred.promise,
+      resolveWaitOutcome: waitOutcomeDeferred.resolve,
+      foregroundState: mode === "wait" ? "waiting" : "not-foreground",
       resolveCompletion: completionDeferred.resolve,
       stdinQueue: Promise.resolve(),
       tracked: false,
@@ -826,6 +868,11 @@ export class ProcessManager {
       internal.timeoutHandle = setTimeout(() => {
         if (internal.completedAt !== undefined) return;
         internal.timedOut = true;
+        if (internal.foregroundState === "waiting") {
+          this.#foreground.delete(internal);
+          internal.foregroundState = "timed-out";
+          internal.resolveWaitOutcome({ type: "timed-out" });
+        }
         try {
           this.signalExecution(internal, "SIGKILL");
         } catch (error) {
@@ -893,6 +940,10 @@ export class ProcessManager {
     };
     internal.completionResult = completion;
     internal.resolveCompletion(completion);
+    if (internal.foregroundState === "waiting") {
+      internal.foregroundState = "completed";
+      internal.resolveWaitOutcome({ type: "completed", completion });
+    }
     this.#notifyCompletion(internal);
   }
 
