@@ -270,6 +270,9 @@ export class OutputStore {
     const requestedLength = options.length === undefined
       ? this.#maxReadBytes
       : requireNonNegativeInteger(options.length, "length");
+    if (!explicit && requestedLength === 0) {
+      throw new RangeError("length must be positive for an implicit read");
+    }
 
     const requestedRange = explicit
       ? this.#explicitRequestedRange(start, requestedLength, snapshotEnd)
@@ -287,6 +290,25 @@ export class OutputStore {
       );
       if (byteLimitedEnd < returnedEnd) reasons.push("bytes");
       returnedEnd = byteLimitedEnd;
+
+      // Keep returnedRange byte-accurate while never decoding a range that starts
+      // or ends inside a UTF-8 sequence. Alignment is inward, so every skipped raw
+      // byte remains visible in omittedRanges. A boundary-cut suffix can be
+      // recovered by resuming at returnedRange.end instead of the requested end.
+      let utf8Adjusted = false;
+      while (
+        returnedStart < returnedEnd
+        && this.#isUtf8ContinuationAt(returnedStart)
+      ) {
+        returnedStart++;
+        utf8Adjusted = true;
+      }
+      const utf8End = this.#utf8AlignedEnd(returnedStart, returnedEnd);
+      if (utf8End < returnedEnd) {
+        returnedEnd = utf8End;
+        utf8Adjusted = true;
+      }
+      if (utf8Adjusted) reasons.push("utf8");
       bytes = this.#readBytes(returnedStart, returnedEnd);
 
       const lineLimitedLength = prefixEndForLineLimit(bytes, this.#maxReadLines);
@@ -335,7 +357,10 @@ export class OutputStore {
 
     const returnedRange = { start: returnedStart, end: returnedEnd };
     const omittedRanges = explicit
-      ? nonEmptyRange(returnedEnd, requestedRange.end)
+      ? [
+          ...nonEmptyRange(requestedRange.start, returnedStart),
+          ...nonEmptyRange(returnedEnd, requestedRange.end),
+        ]
       : nonEmptyRange(requestedRange.start, returnedStart);
     const omittedBytes = omittedRanges.reduce(
       (sum, range) => sum + range.end - range.start,
@@ -449,6 +474,34 @@ export class OutputStore {
       this.#tempDirectory,
       `${this.#tempFilePrefix}-${randomBytes(12).toString("hex")}.log`,
     );
+  }
+
+  #isUtf8ContinuationAt(offset: number): boolean {
+    const byte = this.#readBytes(offset, offset + 1)[0];
+    return byte !== undefined && (byte & 0xc0) === 0x80;
+  }
+
+  #utf8AlignedEnd(start: number, end: number): number {
+    if (end <= start) return end;
+    let leadOffset = end - 1;
+    while (
+      leadOffset >= start
+      && this.#isUtf8ContinuationAt(leadOffset)
+    ) {
+      leadOffset--;
+    }
+    if (leadOffset < start) return start;
+
+    const lead = this.#readBytes(leadOffset, leadOffset + 1)[0];
+    if (lead === undefined) return end;
+    const width = lead >= 0xf0 && lead <= 0xf4
+      ? 4
+      : lead >= 0xe0 && lead <= 0xef
+      ? 3
+      : lead >= 0xc2 && lead <= 0xdf
+      ? 2
+      : 1;
+    return end - leadOffset < width ? leadOffset : end;
   }
 
   #explicitRequestedRange(

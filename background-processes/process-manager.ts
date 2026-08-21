@@ -138,6 +138,8 @@ export interface SignalProcessAndWaitOptions {
   includeUnreadOutput?: boolean;
   /** Drop completion reporting only if the target completes during this operation. */
   suppressCompletionNotification?: boolean;
+  /** Cancel only the completion wait; a signal already sent is not undone. */
+  abortSignal?: AbortSignal;
 }
 
 export interface ProcessManagerOptions extends ProcessManagerCallbacks {
@@ -700,6 +702,9 @@ export class ProcessManager {
     signal = "SIGTERM",
     options: SignalProcessAndWaitOptions = {},
   ): Promise<ProcessSignalResult> {
+    if (options.abortSignal?.aborted) {
+      throw new Error("Process signal wait aborted");
+    }
     const record = this.getActiveProcess(id) as InternalProcess;
     const suppressNotification = options.suppressCompletionNotification
       ?? false;
@@ -713,6 +718,7 @@ export class ProcessManager {
         completion = await this.waitForCompletion(
           record,
           this.#terminatingSignalWaitMs,
+          options.abortSignal,
         );
       }
 
@@ -744,6 +750,7 @@ export class ProcessManager {
   async waitForCompletion(
     execution: ProcessExecution,
     timeoutMs: number,
+    abortSignal?: AbortSignal,
   ): Promise<ProcessCompletion | undefined> {
     if (!this.#owned.has(execution)) {
       throw new ProcessStateError(
@@ -752,15 +759,33 @@ export class ProcessManager {
       );
     }
     const delay = requireNonNegativeTimer(timeoutMs, "timeoutMs");
+    if (abortSignal?.aborted) throw new Error("Process completion wait aborted");
     if (execution.completedAt !== undefined) return execution.completion;
     if (delay === 0) return undefined;
 
-    return new Promise<ProcessCompletion | undefined>((resolve) => {
-      const timer = setTimeout(() => resolve(undefined), delay);
-      void execution.completion.then((result) => {
+    return new Promise<ProcessCompletion | undefined>((resolve, reject) => {
+      let settled = false;
+      const cleanup = (): void => {
         clearTimeout(timer);
+        abortSignal?.removeEventListener("abort", handleAbort);
+      };
+      const resolveOnce = (result: ProcessCompletion | undefined): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
         resolve(result);
-      });
+      };
+      const handleAbort = (): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error("Process completion wait aborted"));
+      };
+
+      const timer = setTimeout(() => resolveOnce(undefined), delay);
+      abortSignal?.addEventListener("abort", handleAbort, { once: true });
+      void execution.completion.then(resolveOnce);
+      if (abortSignal?.aborted) handleAbort();
     });
   }
 

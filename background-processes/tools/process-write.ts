@@ -9,6 +9,8 @@ import {
   formatProcessState,
   type ManagedProcessStatus,
   type ProcessToolOptions,
+  ProcessToolAbortError,
+  raceWithAbortSignal,
   requireProcessManager,
   snapshotProcessStatus,
 } from "./process-utils";
@@ -63,15 +65,16 @@ export function createProcessWriteTool(
       const manager = requireProcessManager(options);
       const close = params.close ?? false;
       try {
-        await manager.writeProcess(params.id, params.data, close);
+        await raceWithAbortSignal(
+          manager.writeProcess(params.id, params.data, close),
+          signal,
+          "Process write aborted",
+        );
       } catch (error) {
+        if (error instanceof ProcessToolAbortError) throw error;
         // Prefer the manager's precise completed-state error if the process exited
         // while an otherwise valid stream write was in flight.
-        try {
-          manager.getActiveProcess(params.id);
-        } catch (stateError) {
-          throw stateError;
-        }
+        manager.getActiveProcess(params.id);
         throw writeFailure(params.id, error);
       }
 

@@ -9,7 +9,7 @@ export interface ByteRange {
   end: number;
 }
 
-export type OutputTruncationReason = "bytes" | "lines";
+export type OutputTruncationReason = "bytes" | "lines" | "utf8";
 
 export interface OutputTruncation {
   truncated: boolean;

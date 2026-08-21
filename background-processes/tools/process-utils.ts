@@ -34,6 +34,52 @@ export interface ProcessToolOptions {
   getManager: () => ProcessManager | undefined;
 }
 
+export class ProcessToolAbortError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProcessToolAbortError";
+  }
+}
+
+/**
+ * Stop awaiting an operation when Pi aborts the tool while continuing to
+ * observe the underlying promise. This prevents late failures from becoming
+ * unhandled rejections and removes the abort listener on every settlement path.
+ */
+export function raceWithAbortSignal<T>(
+  operation: Promise<T>,
+  signal: AbortSignal | undefined,
+  message: string,
+): Promise<T> {
+  if (signal === undefined) return operation;
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => {
+      signal.removeEventListener("abort", handleAbort);
+    };
+    const resolveOnce = (value: T): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const rejectOnce = (error: unknown): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    const handleAbort = (): void => {
+      rejectOnce(new ProcessToolAbortError(message));
+    };
+
+    signal.addEventListener("abort", handleAbort, { once: true });
+    void operation.then(resolveOnce, rejectOnce);
+    if (signal.aborted) handleAbort();
+  });
+}
+
 export function requireProcessManager(options: ProcessToolOptions): ProcessManager {
   const manager = options.getManager();
   if (manager === undefined) {

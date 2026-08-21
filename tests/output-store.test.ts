@@ -348,6 +348,17 @@ describe("OutputStore implicit reads", () => {
     });
   });
 
+  it("rejects a zero-byte implicit budget without advancing the cursor", () => {
+    const { store } = makeStore();
+    store.append("preserved");
+
+    expect(() => store.readImplicit(0)).toThrow(
+      "length must be positive for an implicit read",
+    );
+    expect(store.deliveredCursor).toBe(0);
+    expect(store.readImplicit().content).toBe("preserved");
+  });
+
   it("honors a smaller per-read length without changing the configured ceiling", () => {
     const { store } = makeStore({ maxReadBytes: 10, maxReadLines: 100 });
     store.append("abcdef");
@@ -376,6 +387,68 @@ describe("OutputStore explicit reads", () => {
     });
     expect(store.deliveredCursor).toBe(0);
     expect(store.readImplicit().content).toBe("6789");
+  });
+
+  it("aligns explicit spilled reads inward to UTF-8 boundaries with raw-byte ranges", () => {
+    const { store, path } = makeStore({
+      maxInMemoryBytes: 2,
+      maxInMemoryLines: 100,
+      maxReadBytes: 100,
+      maxReadLines: 100,
+    });
+    store.append("héllo");
+
+    const splitEnd = store.readRange(0, 2);
+    expect(splitEnd).toMatchObject({
+      content: "h",
+      requestedRange: { start: 0, end: 2 },
+      returnedRange: { start: 0, end: 1 },
+      omittedRanges: [{ start: 1, end: 2 }],
+      truncation: { truncated: true, by: ["utf8"], omittedBytes: 1 },
+      cursor: { before: 0, after: 0, advanced: false },
+      spillPath: path,
+    });
+    expect(splitEnd.content).not.toContain("�");
+
+    const recovered = store.readRange(splitEnd.returnedRange.end, 2);
+    expect(recovered).toMatchObject({
+      content: "é",
+      requestedRange: { start: 1, end: 3 },
+      returnedRange: { start: 1, end: 3 },
+      omittedRanges: [],
+    });
+
+    const splitStart = store.readRange(2, 3);
+    expect(splitStart).toMatchObject({
+      content: "ll",
+      requestedRange: { start: 2, end: 5 },
+      returnedRange: { start: 3, end: 5 },
+      omittedRanges: [{ start: 2, end: 3 }],
+      truncation: { truncated: true, by: ["utf8"], omittedBytes: 1 },
+    });
+    expect(splitStart.content).not.toContain("�");
+    expect(store.deliveredCursor).toBe(0);
+  });
+
+  it("defers an incomplete trailing UTF-8 sequence until later bytes arrive", () => {
+    const { store } = makeStore();
+    store.append(Buffer.from([0x68, 0xc3]));
+
+    expect(store.readRange(0, 2)).toMatchObject({
+      content: "h",
+      requestedRange: { start: 0, end: 2 },
+      returnedRange: { start: 0, end: 1 },
+      omittedRanges: [{ start: 1, end: 2 }],
+      truncation: { by: ["utf8"], omittedBytes: 1 },
+    });
+
+    store.append(Buffer.from([0xa9]));
+    expect(store.readRange(1, 2)).toMatchObject({
+      content: "é",
+      requestedRange: { start: 1, end: 3 },
+      returnedRange: { start: 1, end: 3 },
+      omittedRanges: [],
+    });
   });
 
   it("caps an oversized explicit length and reports the omitted suffix", () => {

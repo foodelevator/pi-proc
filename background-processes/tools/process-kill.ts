@@ -11,7 +11,7 @@ import {
   isNormallyTerminatingSignal,
   normalizeSignal,
 } from "../process-manager";
-import type { OutputReadResult } from "../types";
+import type { OutputReadResult, ProcessSignalResult } from "../types";
 import {
   formatOutputSnapshot,
   formatProcessState,
@@ -68,21 +68,30 @@ export function createProcessKillTool(
     parameters: processKillSchema,
 
     async execute(_toolCallId, params, signal) {
-      if (signal?.aborted) throw new Error("Process signal aborted");
+      if (signal?.aborted) throw new Error("Process kill aborted");
       const manager = requireProcessManager(options);
       const normalized = normalizeSignal(params.signal ?? "SIGTERM");
       const waitedForExit = isNormallyTerminatingSignal(
         normalized,
         manager.platform,
       );
-      const result = await manager.signalProcessAndWait(
-        params.id,
-        normalized,
-        {
-          includeUnreadOutput: true,
-          suppressCompletionNotification: true,
-        },
-      );
+      let result: ProcessSignalResult;
+      try {
+        result = await manager.signalProcessAndWait(
+          params.id,
+          normalized,
+          {
+            includeUnreadOutput: true,
+            suppressCompletionNotification: true,
+            ...(signal === undefined ? {} : { abortSignal: signal }),
+          },
+        );
+      } catch (error) {
+        if (signal?.aborted) {
+          throw new Error("Process kill aborted", { cause: error });
+        }
+        throw error;
+      }
       const output = result.output;
       if (output === undefined) {
         throw new Error("Internal error: process signal did not return output");

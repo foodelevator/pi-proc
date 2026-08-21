@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { constants as osConstants, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,23 +52,35 @@ function tools(manager: ProcessManager) {
   return {
     read: {
       ...read,
-      execute: (id: string, params: ProcessReadToolInput) =>
-        read.execute(id, params, undefined, undefined, context),
+      execute: (
+        id: string,
+        params: ProcessReadToolInput,
+        signal?: AbortSignal,
+      ) => read.execute(id, params, signal, undefined, context),
     },
     write: {
       ...write,
-      execute: (id: string, params: ProcessWriteToolInput) =>
-        write.execute(id, params, undefined, undefined, context),
+      execute: (
+        id: string,
+        params: ProcessWriteToolInput,
+        signal?: AbortSignal,
+      ) => write.execute(id, params, signal, undefined, context),
     },
     kill: {
       ...kill,
-      execute: (id: string, params: ProcessKillToolInput) =>
-        kill.execute(id, params, undefined, undefined, context),
+      execute: (
+        id: string,
+        params: ProcessKillToolInput,
+        signal?: AbortSignal,
+      ) => kill.execute(id, params, signal, undefined, context),
     },
     list: {
       ...list,
-      execute: (id: string, params: ProcessListToolInput) =>
-        list.execute(id, params, undefined, undefined, context),
+      execute: (
+        id: string,
+        params: ProcessListToolInput,
+        signal?: AbortSignal,
+      ) => list.execute(id, params, signal, undefined, context),
     },
   };
 }
@@ -120,6 +133,10 @@ describe("auxiliary tool schemas and prompts", () => {
 
     expect(signalSchema.type).toBe("string");
     expect(signalSchema.enum).toEqual(Object.keys(osConstants.signals).sort());
+    expect(auxiliary.read.parameters.properties.length).toMatchObject({
+      type: "integer",
+      minimum: 1,
+    });
     expect(auxiliary.read.promptGuidelines?.join(" ")).toContain(
       "explicit start byte",
     );
@@ -176,6 +193,24 @@ describe("process_read", () => {
     expect(record.outputStore.deliveredCursor).toBe(10);
   });
 
+  it("rejects a zero length without consuming unread output", async () => {
+    const manager = makeManager();
+    const { read } = tools(manager);
+    const record = await manager.startManaged("printf unread");
+    await record.completion;
+
+    await expect(read.execute("zero", {
+      id: record.id,
+      length: 0,
+    })).rejects.toThrow("positive safe integer");
+    expect(record.outputStore.deliveredCursor).toBe(0);
+    expect((await read.execute("recover", { id: record.id })).details.output)
+      .toMatchObject({
+        content: "unread",
+        cursor: { before: 0, after: 6, advanced: true },
+      });
+  });
+
   it("allows completed reads but reports historical and unknown IDs precisely", async () => {
     const manager = makeManager();
     const { read } = tools(manager);
@@ -229,6 +264,56 @@ describe("process_write", () => {
       id: record.id,
       data: "late",
     })).rejects.toThrow("already completed");
+  });
+
+  it("aborts a blocked pipe write without late rejection or listener leaks", async () => {
+    const manager = makeManager();
+    const { write } = tools(manager);
+    const record = await manager.startManaged("sleep 30");
+    const controller = new AbortController();
+    const stdinListeners = {
+      close: record.child.stdin.listenerCount("close"),
+      drain: record.child.stdin.listenerCount("drain"),
+      error: record.child.stdin.listenerCount("error"),
+    };
+    const unhandled: unknown[] = [];
+    const handleUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", handleUnhandled);
+
+    try {
+      const startedAt = Date.now();
+      const pending = write.execute("blocked-abort", {
+        id: record.id,
+        data: "x".repeat(8 * 1024 * 1024),
+      }, controller.signal);
+      await waitUntil(() => record.child.stdin.writableNeedDrain);
+
+      controller.abort();
+
+      await expect(pending).rejects.toThrow("Process write aborted");
+      expect(Date.now() - startedAt).toBeLessThan(500);
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+
+      await manager.signalProcessAndWait(record.id, "SIGKILL");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(unhandled).toEqual([]);
+      expect(record.child.stdin.listenerCount("close")).toBe(
+        stdinListeners.close,
+      );
+      expect(record.child.stdin.listenerCount("drain")).toBe(
+        stdinListeners.drain,
+      );
+      expect(record.child.stdin.listenerCount("error")).toBe(
+        stdinListeners.error,
+      );
+    } finally {
+      process.off("unhandledRejection", handleUnhandled);
+      if (record.completedAt === undefined) {
+        await manager.signalProcessAndWait(record.id, "SIGKILL");
+      }
+    }
   });
 
   it("respects backpressure and reports explicitly closed active stdin", async () => {
@@ -339,6 +424,36 @@ describe("process_kill", () => {
     expect(completionEvents).toEqual([]);
     writeFileSync(release, "go", "utf8");
     await record.completion;
+    expect(completionEvents).toEqual([record.id]);
+  });
+
+  it("aborts the termination wait and preserves later completion reporting", async () => {
+    const manager = makeManager({ terminatingSignalWaitMs: 2_000 });
+    const { kill } = tools(manager);
+    const completionEvents: string[] = [];
+    manager.subscribeEvents((event) => {
+      if (event.type === "completed") completionEvents.push(event.process.id);
+    });
+    const record = await manager.startManaged(
+      "trap '' TERM; printf ready; while :; do sleep 1; done",
+    );
+    await waitForOutput(record, "ready");
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    const pending = kill.execute("abort-wait", {
+      id: record.id,
+    }, controller.signal);
+    await waitUntil(() => record.lastSignal === "SIGTERM");
+
+    controller.abort();
+
+    await expect(pending).rejects.toThrow("Process kill aborted");
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+    expect(record.outputStore.deliveredCursor).toBe(0);
+    expect(completionEvents).toEqual([]);
+
+    await manager.signalProcessAndWait(record.id, "SIGKILL");
     expect(completionEvents).toEqual([record.id]);
   });
 

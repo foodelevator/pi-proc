@@ -28,10 +28,10 @@ export const processReadSchema = Type.Object({
   ),
   length: Type.Optional(
     Type.Integer({
-      minimum: 0,
+      minimum: 1,
       maximum: MAX_SAFE_INTEGER,
       description:
-        "Maximum requested bytes. Returned output is always capped at 50KB and 2000 lines.",
+        "Positive maximum requested bytes. Returned output is always capped at 50KB and 2000 lines.",
     }),
   ),
 });
@@ -50,7 +50,7 @@ export function createProcessReadTool(
     name: "process_read",
     label: "Process Read",
     description:
-      "Read the combined stdout/stderr transcript of a managed process. Without start, returns the unread tail through a fixed snapshot, capped at 50KB/2000 lines, reports any omitted prefix, and advances the implicit cursor to the snapshot end. With start, reads forward from that explicit zero-based byte offset, reports any omitted suffix, and does not move the cursor. Works for active and completed processes retained in the current runtime.",
+      "Read the combined stdout/stderr transcript of a managed process. Without start, returns the unread tail through a fixed snapshot, capped at 50KB/2000 lines, reports any omitted prefix, and advances the implicit cursor to the snapshot end. With start, reads forward without moving the cursor and aligns the returned range inward to UTF-8 boundaries. Requested, returned, and omitted ranges always report raw zero-based byte offsets, including bytes skipped for UTF-8 alignment. Length must be positive. Works for active and completed processes retained in the current runtime.",
     promptSnippet:
       "Read combined stdout/stderr from an active or completed managed process",
     promptGuidelines: [
@@ -61,6 +61,12 @@ export function createProcessReadTool(
     execute(_toolCallId, params, signal) {
       return Promise.resolve().then(() => {
         if (signal?.aborted) throw new Error("Process read aborted");
+        if (
+          params.length !== undefined
+          && (!Number.isSafeInteger(params.length) || params.length < 1)
+        ) {
+          throw new RangeError("Process read length must be a positive safe integer");
+        }
         const manager = requireProcessManager(options);
         const record = manager.getProcess(params.id);
         const output = record.outputStore.read({
