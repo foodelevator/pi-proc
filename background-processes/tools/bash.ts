@@ -36,7 +36,7 @@ export const bashSchema = Type.Object({
   ),
   timeout: Type.Optional(
     Type.Number({
-      description: "Timeout in seconds (optional, no default timeout)",
+      description: "Process-lifetime limit in seconds, from process start. Applies in all modes. Remains active after background/monitor returns or a wait is detached. On expiry, the entire process group is force-killed. Optional, default is no timeout.",
     }),
   ),
 });
@@ -188,7 +188,7 @@ function startedProcessResult(
 } {
   const timeoutText = timeoutSeconds === undefined
     ? ""
-    : ` Timeout: ${timeoutSeconds} seconds.`;
+    : ` The process group will be force-killed in ${timeoutSeconds}.`;
   return {
     content: [{
       type: "text",
@@ -252,6 +252,7 @@ export function createBashTool(
       "Inspect PI_* environment variables if you need current model and session details.",
       "Choose wait or background based on whether useful work should happen concurrently, not based on command duration. Use monitor only when ongoing output must be observed and acted upon. Do not routinely poll managed processes; rely on automatic notifications unless the user explicitly requests a status check.",
       "Use bash mode background or monitor instead of shell-level &, nohup, or daemonization, then manage the returned ID with process_read, process_write, process_kill, and process_list.",
+      "Never use timeout as a startup or readiness bound. For servers, watchers, GUI applications, and other persistent processes, normally omit it and bound readiness check separately, if such are needed.",
     ],
     parameters: bashSchema,
     renderCall: renderBashCall,
