@@ -283,6 +283,27 @@ describe("managed process tool renderers", () => {
     }
   });
 
+  it("preserves command newlines and wraps long bash calls without truncating them", () => {
+    if (bash.renderCall === undefined) throw new Error("Missing bash call renderer");
+    const command = `printf first\nid\nprintf '${"x".repeat(40)}-tail'`;
+    const component = bash.renderCall(
+      { command, mode: "monitor" },
+      testTheme(),
+      context({ command, mode: "monitor" as const }),
+    );
+
+    const lines = component.render(18);
+    const rendered = plain(lines);
+
+    expect(lines.length).toBeGreaterThan(2);
+    expect(rendered.split("\n").slice(0, 2)).toEqual(["$ printf first", "id"]);
+    expect(count(rendered, "x")).toBe(40);
+    expect(rendered).toContain("-tail'");
+    expect(rendered).toContain("[monitor]");
+    expect(rendered).not.toContain("…");
+    assertWidths(lines, 18);
+  });
+
   it("renders real Pi error rows for historical, unknown, completed, and state failures", () => {
     const cases: Array<{
       tool: ManagedToolDefinition;

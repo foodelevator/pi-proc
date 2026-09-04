@@ -382,6 +382,13 @@ export function normalizeCommandLine(command: string): string {
     .trim();
 }
 
+function commandDisplayText(command: string): string {
+  return stripTerminalSequences(command)
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, " ")
+    .trim();
+}
+
 function elapsedSeconds(record: ManagedProcessRecord, now: number): number {
   return Math.max(0, Math.floor((now - record.startedAt) / 1_000));
 }
@@ -690,7 +697,7 @@ export function renderBashCall(
   }
   return componentFor(context, (width) => {
     const command = typeof args.command === "string" && args.command.length > 0
-      ? normalizeCommandLine(args.command)
+      ? commandDisplayText(args.command)
       : "…";
     const mode = args.mode ?? "wait";
     const suffix = [
@@ -699,11 +706,10 @@ export function renderBashCall(
         ? []
         : [theme.fg("muted", ` (timeout ${args.timeout}s)`)]),
     ].join("");
-    return [truncateToWidth(
+    return wrapTextWithAnsi(
       theme.fg("toolTitle", theme.bold(`$ ${command}`)) + suffix,
       width,
-      "…",
-    )];
+    );
   });
 }
 
