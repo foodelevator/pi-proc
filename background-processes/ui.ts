@@ -797,8 +797,6 @@ export function renderBashResult(
           lines.push(...outputLines(descriptorOutput.content, width, true, theme));
         }
       }
-      const duration = bashDurationLine(options, state, theme);
-      if (duration !== undefined) lines.push(duration);
       return lines;
     }
 

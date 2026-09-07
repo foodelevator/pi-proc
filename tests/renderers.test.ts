@@ -679,6 +679,47 @@ describe("managed process tool renderers", () => {
     assertWidths(expanded.render(50), 50);
   });
 
+  it.each(["background", "monitor", "wait"] as const)(
+    "omits launch duration for %s commands handed off to a managed process",
+    (mode) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const detached = mode === "wait";
+      const result = {
+        content: [{ type: "text", text: "Started process p9" }],
+        details: {
+          process: {
+            kind: "started",
+            id: "p9",
+            mode: detached ? "background" : mode,
+            command: "npm test",
+            cwd: "/tmp",
+            pid: 9,
+            startedAt: 1_000,
+            ...(detached ? { reason: "detached_by_steering" } : {}),
+          },
+        },
+        isError: false,
+      };
+
+      for (const expanded of [false, true]) {
+        const lines = renderToolExecution(
+          bash,
+          { command: "npm test", mode },
+          result,
+          80,
+          expanded,
+        );
+        const text = plain(lines);
+        expect(text).toContain("p9");
+        expect(text).toContain(detached ? "detached by steering" : "started");
+        expect(text).not.toContain("Took");
+        expect(text).not.toContain("Elapsed");
+        assertWidths(lines, 80);
+      }
+    },
+  );
+
   it("uses footer-free truncated output, trims trailing newlines, and keeps familiar wait cues", () => {
     if (bash.renderCall === undefined || bash.renderResult === undefined) {
       throw new Error("Missing bash renderers");
