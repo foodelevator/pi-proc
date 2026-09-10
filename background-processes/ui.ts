@@ -11,9 +11,11 @@ import {
   type Component,
   stripTerminalSequences,
   truncateToWidth,
+  visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 
+import { formatDuration } from "./duration";
 import type { ProcessNotificationBatchDetails } from "./notification-scheduler";
 import type {
   ProcessManagerEventListener,
@@ -389,8 +391,11 @@ function commandDisplayText(command: string): string {
     .trim();
 }
 
-function elapsedSeconds(record: ManagedProcessRecord, now: number): number {
-  return Math.max(0, Math.floor((now - record.startedAt) / 1_000));
+function styledDuration(milliseconds: number, theme: Theme, fractionalSeconds = false): string {
+  return formatDuration(milliseconds, fractionalSeconds).replace(
+    /(\d+(?:\.\d+)?)([dhms])/g,
+    (_match, value: string, unit: string) => theme.fg("muted", value) + theme.fg("dim", unit),
+  );
 }
 
 export function createRunningProcessesWidget(
@@ -407,14 +412,15 @@ export function createRunningProcessesWidget(
       (widest, record) => Math.max(widest, record.id.length),
       0,
     );
-    return records.map((record) => {
+    const timestamp = now();
+    const durations = records.map((record) => styledDuration(timestamp - record.startedAt, theme));
+    const durationWidth = Math.max(5, ...durations.map(visibleWidth));
+    return records.map((record, index) => {
       const dot = theme.fg("success", "●");
       const id = theme.fg("accent", record.id.padEnd(idWidth));
       const mode = theme.fg("muted", record.mode.padEnd(10));
-      const elapsed = theme.fg(
-        "dim",
-        `${elapsedSeconds(record, now())}s`.padStart(5),
-      );
+      const duration = durations[index];
+      const elapsed = " ".repeat(durationWidth - visibleWidth(duration)) + duration;
       const command = theme.fg("text", normalizeCommandLine(record.command));
       return truncateToWidth(`${dot} ${id}  ${mode} ${elapsed}  ${command}`, width, "…");
     });
@@ -553,10 +559,6 @@ function outputLines(
   return [truncateToWidth(hint, width, "…"), ...preview.visualLines];
 }
 
-function formatDuration(milliseconds: number): string {
-  return `${(milliseconds / 1_000).toFixed(1)}s`;
-}
-
 function bashDurationLine(
   options: ToolRenderResultOptions,
   state: BashRenderState,
@@ -564,10 +566,8 @@ function bashDurationLine(
 ): string | undefined {
   if (state.startedAt === undefined) return undefined;
   const end = state.endedAt ?? Date.now();
-  return theme.fg(
-    "muted",
-    `${options.isPartial ? "Elapsed" : "Took"} ${formatDuration(end - state.startedAt)}`,
-  );
+  return theme.fg("muted", `${options.isPartial ? "Elapsed" : "Took"} `)
+    + styledDuration(end - state.startedAt, theme, true);
 }
 
 function range(rangeValue: { start: number; end: number }): string {
@@ -645,7 +645,11 @@ export function renderProcessNotificationMessage(
         for (const [index, item] of details.processes.entries()) {
           if (index > 0) lines.push("");
           lines.push(processResultSummary(item.status, theme));
-          lines.push(theme.fg("dim", `events ${item.events.join("+")} · ${Math.floor(item.status.durationMs / 1_000)}s · PID ${item.status.pid}`));
+          lines.push(
+            theme.fg("dim", `events ${item.events.join("+")} · `)
+              + styledDuration(item.status.durationMs, theme)
+              + theme.fg("dim", ` · PID ${item.status.pid}`),
+          );
           lines.push(...styledWrappedLines(
             `command ${normalizeCommandLine(item.status.command)}`,
             contentWidth,

@@ -22,6 +22,7 @@ import { createProcessListTool } from "../background-processes/tools/process-lis
 import { createProcessReadTool } from "../background-processes/tools/process-read";
 import { createProcessWriteTool } from "../background-processes/tools/process-write";
 import type { OutputReadResult } from "../background-processes/types";
+import { renderProcessNotificationMessage } from "../background-processes/ui";
 
 function testTheme(marker = ""): Theme {
   return {
@@ -244,6 +245,23 @@ describe("process notification renderer", () => {
     expect(expandedText).toContain("/tmp/pi-proc-spill.log");
     expect(expandedText).toContain("secret-output");
     assertWidths(expandedLines, 42);
+  });
+
+  it("formats expanded notification durations with gray numbers and dim units", () => {
+    const batch = details("");
+    batch.processes[0].status.durationMs = 90_061_000;
+    const theme = testTheme();
+    const fg = vi.spyOn(theme, "fg");
+    const component = renderProcessNotificationMessage(
+      { content: "", details: batch },
+      { expanded: true, outputPad: 0 },
+      theme,
+    );
+    expect(plain(component.render(100))).toContain("1d1h1m1s");
+    expect(fg).toHaveBeenCalledWith("muted", "1");
+    for (const unit of ["d", "h", "m", "s"]) {
+      expect(fg).toHaveBeenCalledWith("dim", unit);
+    }
   });
 
   it("recomputes theme styling after component invalidation", () => {
@@ -813,6 +831,26 @@ describe("managed process tool renderers", () => {
       expect(ours).not.toContain("[Showing lines");
       expect(count(ours, "Full output:")).toBe(1);
     }
+  });
+
+  it.each([true, false])("renders compact two-tone bash durations (partial=%s)", (isPartial) => {
+    if (bash.renderResult === undefined) throw new Error("Missing bash renderer");
+    vi.useFakeTimers();
+    vi.setSystemTime(90_061_000);
+    const theme = testTheme();
+    const fg = vi.spyOn(theme, "fg");
+    const component = bash.renderResult(
+      { content: [], details: undefined },
+      { expanded: false, isPartial },
+      theme,
+      { ...context({ command: "long-command" }), state: { startedAt: 0 } },
+    );
+    expect(plain(component.render(80))).toContain(`${isPartial ? "Elapsed" : "Took"} 1d1h1m1s`);
+    expect(fg).toHaveBeenCalledWith("muted", "1");
+    for (const unit of ["d", "h", "m", "s"]) {
+      expect(fg).toHaveBeenCalledWith("dim", unit);
+    }
+    assertWidths(component.render(12), 12);
   });
 
   it("renders familiar pending, failed, and small wait rows", () => {

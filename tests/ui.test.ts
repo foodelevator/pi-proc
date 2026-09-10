@@ -145,6 +145,43 @@ describe("running process widget", () => {
     expect(lines[1]).toMatch(/^● p10\s{2}monitor/);
   });
 
+  it("uses compact two-tone durations and aligns commands across different durations", () => {
+    const theme = testTheme();
+    const fg = vi.spyOn(theme, "fg");
+    const source = new FakeProcessSource();
+    source.records = [
+      record("p1", { startedAt: 0, command: "first" }),
+      record("p2", { startedAt: 255_232_000, command: "second" }),
+    ];
+    const widget = createRunningProcessesWidget(source, theme, {
+      now: () => 255_233_000,
+    });
+    const lines = widget.render(80).map((line) => line.replace(/\u001b\[[0-9;]*m/g, ""));
+    expect(lines[0]).toContain("2d22h53m53s");
+    expect(lines[1]).toContain("1s");
+    expect(lines[0]?.indexOf("first")).toBe(lines[1]?.indexOf("second"));
+    for (const value of ["2", "22", "53", "1"]) {
+      expect(fg).toHaveBeenCalledWith("muted", value);
+    }
+    for (const unit of ["d", "h", "m", "s"]) {
+      expect(fg).toHaveBeenCalledWith("dim", unit);
+    }
+    for (const width of [1, 12, 24, 40]) {
+      expect(widget.render(width).every((line) => visibleWidth(line) <= width)).toBe(true);
+    }
+  });
+
+  it("rolls elapsed time into larger units after invalidation", () => {
+    const source = new FakeProcessSource();
+    source.records = [record("p1", { startedAt: 0 })];
+    let now = 59_000;
+    const widget = createRunningProcessesWidget(source, testTheme(), { now: () => now });
+    expect(widget.render(80).join("")).toContain("59");
+    now = 60_000;
+    widget.invalidate();
+    expect(widget.render(80).join("").replace(/\u001b\[[0-9;]*m/g, "")).toContain("1m");
+  });
+
   it("installs only while active, ticks once per second, and disposes every resource", () => {
     vi.useFakeTimers();
     const source = new FakeProcessSource();

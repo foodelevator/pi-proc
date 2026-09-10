@@ -4,6 +4,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 
+import { formatDuration } from "../duration";
 import { renderProcessListCall, renderProcessListResult } from "../ui";
 import {
   formatProcessState,
@@ -29,11 +30,6 @@ export type ProcessListToolInput = Static<typeof processListSchema>;
 export interface ProcessListToolDetails {
   includeCompleted: boolean;
   processes: Array<ManagedProcessStatus | HistoricalProcessStatus>;
-}
-
-function formatDuration(durationMs: number): string {
-  if (durationMs < 1_000) return `${durationMs}ms`;
-  return `${(durationMs / 1_000).toFixed(1)}s`;
 }
 
 function singleLine(command: string): string {
@@ -100,7 +96,10 @@ export function createProcessListTool(
               const spill = output.spillPath === undefined
                 ? ""
                 : `; spill ${output.spillPath}`;
-              return `${processStatus.id}  ${formatProcessState(processStatus)}  ${processStatus.mode}  PID ${processStatus.pid}  ${formatDuration(processStatus.durationMs)}  ${output.totalBytes} bytes/${output.totalLines} lines${spill}  ${singleLine(processStatus.command)}`;
+              const duration = processStatus.durationMs < 1_000
+                ? `${processStatus.durationMs}ms`
+                : formatDuration(processStatus.durationMs, true);
+              return `${processStatus.id}  ${formatProcessState(processStatus)}  ${processStatus.mode}  PID ${processStatus.pid}  ${duration}  ${output.totalBytes} bytes/${output.totalLines} lines${spill}  ${singleLine(processStatus.command)}`;
             }).join("\n");
         return {
           content: [{ type: "text" as const, text }],
