@@ -186,12 +186,12 @@ describe("cross-component managed-process contracts", () => {
       type: "tool_execution_start",
       toolCallId: "pending-bash",
       toolName: "bash",
-      args: { command: "printf pending; read value" },
+      args: { command: "printf pending; read value", stdin: "pipe" },
     });
 
     const detached = await bash.execute(
       "pending-bash",
-      { command: "printf pending; read value" },
+      { command: "printf pending; read value", stdin: "pipe" },
       undefined,
       undefined,
       harness.ctx,
@@ -229,11 +229,11 @@ describe("cross-component managed-process contracts", () => {
       type: "tool_execution_start",
       toolCallId: "next-bash",
       toolName: "bash",
-      args: { command: "printf next; read value" },
+      args: { command: "printf next; read value", stdin: "pipe" },
     });
     const nextWait = bash.execute(
       "next-bash",
-      { command: "printf next; read value" },
+      { command: "printf next; read value", stdin: "pipe" },
       undefined,
       undefined,
       harness.ctx,
@@ -280,7 +280,7 @@ describe("cross-component managed-process contracts", () => {
     for (const [index, command] of commands.entries()) {
       waits.push(bash.execute(
         `wait-${index}`,
-        { command },
+        { command, stdin: "pipe" },
         undefined,
         (update) => updates[index]?.push(text(update)),
         harness.ctx,
@@ -379,7 +379,7 @@ describe("cross-component managed-process contracts", () => {
     for (const label of ["A", "B"]) {
       started.push(await bash.execute(
         `monitor-${label}`,
-        { command: command(label), mode: "monitor" },
+        { command: command(label), mode: "monitor", stdin: "pipe" },
         undefined,
         undefined,
         harness.ctx,

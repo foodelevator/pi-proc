@@ -284,11 +284,33 @@ describe("process_read", () => {
 });
 
 describe("process_write", () => {
+  it("explains how to enable stdin when a command was started without it", async () => {
+    const manager = makeManager();
+    const { write, list } = tools(manager);
+    const record = await manager.startManaged("sleep 30");
+
+    try {
+      await expect(write.execute("disabled-stdin", {
+        id: record.id,
+        data: "input\n",
+      })).rejects.toThrow('stdin="pipe"');
+      await expect(write.execute("disabled-eof", {
+        id: record.id,
+        close: true,
+      })).rejects.toThrow("without writable stdin");
+      expect((await list.execute("stdin-status", {})).details.processes)
+        .toMatchObject([{ id: record.id, stdinClosed: true }]);
+    } finally {
+      await manager.signalProcessAndWait(record.id, "SIGKILL");
+    }
+  });
+
   it("adds no newline, then writes an explicit newline and sends EOF", async () => {
     const manager = makeManager();
     const { read, write } = tools(manager);
     const record = await manager.startManaged(
       "IFS= read -r line; printf 'line:%s|' \"$line\"; rest=$(cat); printf 'rest:%s' \"$rest\"",
+      { stdin: "pipe" },
     );
 
     const first = await write.execute("no-newline", {
@@ -317,12 +339,14 @@ describe("process_write", () => {
   it("aborts a blocked pipe write without late rejection or listener leaks", async () => {
     const manager = makeManager();
     const { write } = tools(manager);
-    const record = await manager.startManaged("sleep 30");
+    const record = await manager.startManaged("sleep 30", { stdin: "pipe" });
+    const stdin = record.child.stdin;
+    if (stdin === null) throw new Error("Expected writable stdin");
     const controller = new AbortController();
     const stdinListeners = {
-      close: record.child.stdin.listenerCount("close"),
-      drain: record.child.stdin.listenerCount("drain"),
-      error: record.child.stdin.listenerCount("error"),
+      close: stdin.listenerCount("close"),
+      drain: stdin.listenerCount("drain"),
+      error: stdin.listenerCount("error"),
     };
     const unhandled: unknown[] = [];
     const handleUnhandled = (reason: unknown): void => {
@@ -336,7 +360,7 @@ describe("process_write", () => {
         id: record.id,
         data: "x".repeat(8 * 1024 * 1024),
       }, controller.signal);
-      await waitUntil(() => record.child.stdin.writableNeedDrain);
+      await waitUntil(() => stdin.writableNeedDrain);
 
       controller.abort();
 
@@ -347,13 +371,13 @@ describe("process_write", () => {
       await manager.signalProcessAndWait(record.id, "SIGKILL");
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(unhandled).toEqual([]);
-      expect(record.child.stdin.listenerCount("close")).toBe(
+      expect(stdin.listenerCount("close")).toBe(
         stdinListeners.close,
       );
-      expect(record.child.stdin.listenerCount("drain")).toBe(
+      expect(stdin.listenerCount("drain")).toBe(
         stdinListeners.drain,
       );
-      expect(record.child.stdin.listenerCount("error")).toBe(
+      expect(stdin.listenerCount("error")).toBe(
         stdinListeners.error,
       );
     } finally {
@@ -367,7 +391,7 @@ describe("process_write", () => {
   it("respects backpressure and reports explicitly closed active stdin", async () => {
     const manager = makeManager();
     const { write } = tools(manager);
-    const counted = await manager.startManaged("sleep 0.03; wc -c");
+    const counted = await manager.startManaged("sleep 0.03; wc -c", { stdin: "pipe" });
     const data = "x".repeat(1024 * 1024);
 
     await write.execute("backpressure", {
@@ -380,7 +404,9 @@ describe("process_write", () => {
       String(data.length),
     );
 
-    const closed = await manager.startManaged("cat >/dev/null; printf eof; sleep 30");
+    const closed = await manager.startManaged("cat >/dev/null; printf eof; sleep 30", {
+      stdin: "pipe",
+    });
     await write.execute("close", { id: closed.id, close: true });
     await waitForOutput(closed, "eof");
     await expect(write.execute("closed", {

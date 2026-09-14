@@ -1,7 +1,7 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
 import { constants as osConstants } from "node:os";
+import type { Writable } from "node:stream";
 
 import { OutputStore } from "./output-store";
 import { MAX_RESTORABLE_PROCESS_NUMBER } from "./types";
@@ -68,6 +68,7 @@ export type ProcessStateFailure =
   | "active"
   | "completed"
   | "stdin-closed"
+  | "stdin-disabled"
   | "not-foreground"
   | "manager-closed";
 
@@ -183,7 +184,6 @@ type ForegroundState =
 interface InternalProcess extends ProcessExecution {
   id?: string;
   mode: ProcessMode;
-  child: ChildProcessWithoutNullStreams;
   detachment: Promise<ManagedProcessRecord>;
   resolveDetachment: (record: ManagedProcessRecord) => void;
   waitOutcome: Promise<ForegroundWaitOutcome>;
@@ -278,11 +278,10 @@ function callSafely(
 }
 
 async function writeChunk(
-  child: ChildProcessWithoutNullStreams,
+  stdin: Writable,
   data: string,
 ): Promise<void> {
   if (data.length === 0) return;
-  const stdin = child.stdin;
   await new Promise<void>((resolve, reject) => {
     let callbackDone = false;
     let drainDone = true;
@@ -333,8 +332,7 @@ async function writeChunk(
   });
 }
 
-async function closeStdin(child: ChildProcessWithoutNullStreams): Promise<void> {
-  const stdin = child.stdin;
+async function closeStdin(stdin: Writable): Promise<void> {
   if (stdin.destroyed || stdin.writableEnded) return;
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -668,6 +666,13 @@ export class ProcessManager {
     close = false,
   ): Promise<void> {
     const record = this.getActiveProcess(id) as InternalProcess;
+    const stdin = record.child.stdin;
+    if (stdin === null) {
+      throw new ProcessStateError(
+        "stdin-disabled",
+        `Process \`${id}\` was started without writable stdin. Set stdin="pipe" when starting a command that needs process_write.`,
+      );
+    }
     if (record.stdinClosed) {
       throw new ProcessStateError(
         "stdin-closed",
@@ -677,11 +682,11 @@ export class ProcessManager {
     if (close) record.stdinClosed = true;
 
     const operation = record.stdinQueue.then(async () => {
-      if (data !== undefined) await writeChunk(record.child, data);
-      if (close) await closeStdin(record.child);
+      if (data !== undefined) await writeChunk(stdin, data);
+      if (close) await closeStdin(stdin);
     });
     record.stdinQueue = operation.catch(() => {
-      if (record.child.stdin.destroyed) record.stdinClosed = true;
+      if (stdin.destroyed) record.stdinClosed = true;
     });
     return operation;
   }
@@ -871,6 +876,7 @@ export class ProcessManager {
         cwd,
         env,
         outputStore,
+        ...(options.stdin === undefined ? {} : { stdin: options.stdin }),
         ...(this.#shellPath === undefined ? {} : { shellPath: this.#shellPath }),
         ...(this.#shellConfig === undefined
           ? {}
@@ -912,7 +918,7 @@ export class ProcessManager {
       pid: 0,
       startedAt: Date.now(),
       timedOut: false,
-      stdinClosed: false,
+      stdinClosed: shell.child.stdin === null,
       outputStore,
       get deliveredCursor() {
         return outputStore.deliveredCursor;
@@ -1166,7 +1172,7 @@ export class ProcessManager {
 
     for (const execution of active) {
       if (execution.completedAt === undefined) {
-        execution.child.stdin.destroy();
+        execution.child.stdin?.destroy();
         execution.child.stdout.destroy();
         execution.child.stderr.destroy();
       }

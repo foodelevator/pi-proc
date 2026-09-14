@@ -98,8 +98,8 @@ describe("steering input event", () => {
     const manager = managers[0];
     if (manager === undefined) throw new Error("Manager was not created");
 
-    const first = await manager.startForeground("printf first; read value");
-    const second = await manager.startForeground("printf second; read value");
+    const first = await manager.startForeground("printf first; read value", { stdin: "pipe" });
+    const second = await manager.startForeground("printf second; read value", { stdin: "pipe" });
     await waitUntil(() =>
       first.outputStore.totalBytes === 5 && second.outputStore.totalBytes === 6
     );
@@ -121,7 +121,7 @@ describe("steering input event", () => {
     expect((await first.waitOutcome).type).toBe("detached");
     expect((await second.waitOutcome).type).toBe("detached");
 
-    const third = await manager.startForeground("printf third; read value");
+    const third = await manager.startForeground("printf third; read value", { stdin: "pipe" });
     await waitUntil(() => third.outputStore.totalBytes === 5);
     await input(inputEvent("rpc", "steer"), ctx);
     expect((await third.waitOutcome).type).toBe("detached");

@@ -1,4 +1,6 @@
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   createBashToolDefinition,
@@ -13,10 +15,12 @@ import {
   bashSchema,
   createBashTool,
   type BackgroundBashToolDetails,
+  type BackgroundBashToolInput,
 } from "../background-processes/tools/bash";
 
 const managers: ProcessManager[] = [];
 const spillPaths: string[] = [];
+const temporaryDirectories: string[] = [];
 const context = { mode: "tui" } as ExtensionContext;
 
 function contextFor(mode: ExtensionContext["mode"]): ExtensionContext {
@@ -38,7 +42,7 @@ function toolFor(manager: ProcessManager) {
 
 async function execute(
   manager: ProcessManager,
-  params: { command: string; mode?: "wait" | "background" | "monitor"; timeout?: number },
+  params: BackgroundBashToolInput,
   signal?: AbortSignal,
   onUpdate?: (result: AgentToolResult<BackgroundBashToolDetails | undefined>) => void,
   executionContext: ExtensionContext = context,
@@ -66,14 +70,18 @@ async function waitUntil(
 afterEach(async () => {
   await Promise.all(managers.splice(0).map(async (manager) => manager.shutdown()));
   for (const path of spillPaths.splice(0)) rmSync(path, { force: true });
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 describe("bash override schema", () => {
-  it("publishes the final command/mode/timeout shape", () => {
+  it("publishes the command/mode/stdin/timeout shape", () => {
     expect(bashSchema.required).toEqual(["command"]);
     expect(Object.keys(bashSchema.properties)).toEqual([
       "command",
       "mode",
+      "stdin",
       "timeout",
     ]);
     const modeSchema = bashSchema.properties.mode as unknown as Record<
@@ -120,6 +128,56 @@ describe("bash override schema", () => {
   });
 });
 
+describe("bash stdin defaults", () => {
+  it.each([undefined, "background", "monitor"] as const)(
+    "searches files with bare rg in mode %s without waiting for stdin",
+    async (mode) => {
+      const cwd = mkdtempSync(join(tmpdir(), "pi-proc-rg-"));
+      temporaryDirectories.push(cwd);
+      writeFileSync(join(cwd, "fixture.txt"), "use from-file\n");
+      const manager = makeManager({ cwd });
+
+      const result = await execute(manager, {
+        command: "rg 'use'",
+        ...(mode === undefined ? {} : { mode }),
+        timeout: 1,
+      });
+      const descriptor = result.details?.process;
+      if (mode === undefined) {
+        expect(result.content).toEqual([{
+          type: "text",
+          text: "fixture.txt:use from-file\n",
+        }]);
+      } else {
+        if (descriptor === undefined) throw new Error("Expected process ID");
+        const record = manager.getProcess(descriptor.id);
+        expect(await record.completion).toMatchObject({
+          exitCode: 0,
+          timedOut: false,
+        });
+        expect(record.outputStore.readRange(0).content).toBe(
+          "fixture.txt:use from-file\n",
+        );
+      }
+    },
+  );
+
+  it.each([
+    ["printf 'use from-pipe\\n' | rg 'use'", "use from-pipe\n"],
+    ["rg 'use' < fixture.txt", "use from-file\n"],
+    ["rg 'use' <<'EOF'\nuse from-heredoc\nEOF", "use from-heredoc\n"],
+  ])("preserves shell-provided input: %s", async (command, output) => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-proc-redirect-"));
+    temporaryDirectories.push(cwd);
+    writeFileSync(join(cwd, "fixture.txt"), "use from-file\n");
+    const manager = makeManager({ cwd });
+
+    const result = await execute(manager, { command, timeout: 1 });
+
+    expect(result.content).toEqual([{ type: "text", text: output }]);
+  });
+});
+
 describe("managed bash execution", () => {
   it.each(["background", "monitor"] as const)(
     "returns a stable started descriptor for %s mode",
@@ -159,6 +217,7 @@ describe("managed bash execution", () => {
     const result = await execute(manager, {
       command: "read line; printf 'received:%s' \"$line\"",
       mode: "background",
+      stdin: "pipe",
     });
     const id = result.details?.process?.id;
     if (id === undefined) throw new Error("Expected process ID");
@@ -185,6 +244,7 @@ describe("managed bash execution", () => {
     const result = await execute(manager, {
       command: "read line; printf 'late:%s' \"$line\"",
       mode: "monitor",
+      stdin: "pipe",
     });
     const id = result.details?.process?.id;
     if (id === undefined) throw new Error("Expected process ID");
@@ -342,7 +402,7 @@ describe("steering-detached wait execution", () => {
 
     const running = execute(
       manager,
-      { command: "printf ready; read ignored; printf later" },
+      { command: "printf ready; read ignored; printf later", stdin: "pipe" },
       controller.signal,
     );
     await waitUntil(() => {
@@ -406,6 +466,9 @@ describe("steering-detached wait execution", () => {
       timeoutSeconds: 0.15,
     });
     expect(record.completedAt).toBeUndefined();
+    await expect(manager.writeProcess(record.id, "input\n")).rejects.toMatchObject({
+      kind: "stdin-disabled",
+    });
     expect(await record.completion).toMatchObject({
       timedOut: true,
       exitSignal: "SIGKILL",
@@ -418,7 +481,7 @@ describe("wait-compatible bash execution", () => {
   it("defaults to a private wait and returns Pi's successful result shape", async () => {
     const manager = makeManager();
 
-    const result = await execute(manager, { command: "printf hello" });
+    const result = await execute(manager, { command: "printf hello", stdin: "ignore" });
 
     expect(result).toEqual({
       content: [{ type: "text", text: "hello" }],

@@ -54,7 +54,7 @@ export function createProcessWriteTool(
     name: "process_write",
     label: "Process Write",
     description:
-      "Write exact UTF-8 data to an active managed process's stdin. This tool never appends a newline: callers must include \\n in data when the program expects Enter. Writes respect stream backpressure. Set close=true to flush the data and then send EOF. Closed stdin, completed processes, historical IDs, and unknown IDs are errors.",
+      "Write exact UTF-8 data to an active managed process's stdin. Requires bash stdin=\"pipe\" at launch; stdin cannot be enabled later. This tool never appends a newline: callers must include \\n in data when the program expects Enter. Writes respect stream backpressure. Set close=true to flush the data and then send EOF. Closed stdin, completed processes, historical IDs, and unknown IDs are errors.",
     promptSnippet: "Write exact stdin bytes or send EOF to a managed process",
     promptGuidelines: [
       "process_write does not add a newline; include \\n in data explicitly when submitting a line, and use close=true only when the process should receive EOF.",

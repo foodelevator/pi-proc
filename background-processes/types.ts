@@ -1,4 +1,5 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessByStdio } from "node:child_process";
+import type { Readable, Writable } from "node:stream";
 
 import type { OutputStore } from "./output-store";
 
@@ -77,6 +78,7 @@ export interface OutputStoreOptions {
 export const MAX_RESTORABLE_PROCESS_NUMBER = 0xffff_ffff;
 
 export type ProcessMode = "wait" | "background" | "monitor";
+export type ProcessStdinMode = "ignore" | "pipe";
 export type PublicProcessMode = Exclude<ProcessMode, "wait">;
 export type ProcessOutputSource = "stdout" | "stderr";
 
@@ -102,7 +104,7 @@ export interface ProcessExecution {
   command: string;
   cwd: string;
   mode: ProcessMode;
-  child: ChildProcessWithoutNullStreams;
+  child: ChildProcessByStdio<Writable | null, Readable, Readable>;
   pid: number;
   startedAt: number;
   completedAt?: number;
@@ -167,6 +169,8 @@ export interface HistoricalProcessRecord {
 
 export interface StartProcessOptions {
   mode?: ProcessMode;
+  /** Defaults to /dev/null; opt in to a pipe for process_write before launch. */
+  stdin?: ProcessStdinMode;
   cwd?: string;
   /** Milliseconds; the process group is sent SIGKILL when this expires. */
   timeoutMs?: number;

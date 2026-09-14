@@ -363,6 +363,7 @@ describe("real Pi runtime loading", () => {
       const stdinProcess = await bash.execute("real-stdin-background", {
         command: "data=$(cat); printf '<%s>' \"$data\"",
         mode: "background",
+        stdin: "pipe",
       });
       expect(stdinProcess.details).toMatchObject({
         process: { id: "p2", mode: "background" },

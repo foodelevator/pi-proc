@@ -173,6 +173,7 @@ export type {
   ProcessCompletion,
   ProcessExecution,
   ProcessMode,
+  ProcessStdinMode,
   ProcessOutputSource,
   ProcessShutdownResult,
   ProcessShutdownSignalFailure,

@@ -383,7 +383,7 @@ describe("ProcessManager lifecycle", () => {
 describe("stdin, signals, and shutdown", () => {
   it("writes stdin exactly, closes it explicitly, and rejects later writes", async () => {
     const processes = manager();
-    const record = await processes.startManaged("cat");
+    const record = await processes.startManaged("cat", { stdin: "pipe" });
 
     await processes.writeProcess(record.id, "first\n");
     await processes.writeProcess(record.id, "second-without-newline", true);
@@ -399,7 +399,9 @@ describe("stdin, signals, and shutdown", () => {
 
   it("reports an explicitly closed stdin while the process remains active", async () => {
     const processes = manager();
-    const record = await processes.startManaged("cat >/dev/null; sleep 30");
+    const record = await processes.startManaged("cat >/dev/null; sleep 30", {
+      stdin: "pipe",
+    });
 
     await processes.writeProcess(record.id, undefined, true);
 
@@ -411,7 +413,7 @@ describe("stdin, signals, and shutdown", () => {
 
   it("honors stream backpressure before flushing EOF", async () => {
     const processes = manager();
-    const record = await processes.startManaged("sleep 0.03; wc -c");
+    const record = await processes.startManaged("sleep 0.03; wc -c", { stdin: "pipe" });
     const data = "x".repeat(1024 * 1024);
 
     await processes.writeProcess(record.id, data, true);

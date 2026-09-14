@@ -2,7 +2,7 @@
 
 A distributable [Pi](https://pi.dev) extension for managed background processes on macOS and Linux.
 
-`pi-proc` overrides `bash` without changing its default behavior. Normal calls still use `mode: "wait"`, stream combined stdout/stderr, and preserve Pi-style tail truncation and spill files. Detached modes return stable IDs (`p1`, `p2`, …) for later reads, writes, signals, and listing.
+`pi-proc` overrides `bash` with managed process execution. Normal calls use `mode: "wait"`, stream combined stdout/stderr, and preserve Pi-style tail truncation and spill files. Stdin defaults to `/dev/null`; writable input is opt-in. Detached modes return stable IDs (`p1`, `p2`, …) for later reads, writes, signals, and listing.
 
 ## Install and load
 
@@ -50,6 +50,20 @@ Monitor mode also batches stdout activity into process notifications. Any unread
 
 Detached modes are available in TUI and RPC sessions. In Print and JSON sessions, only wait mode is allowed.
 
+### Writable stdin
+
+Stdin is independent of execution mode. By default (`stdin: "ignore"`), the process receives `/dev/null`, so ordinary commands such as `rg 'pattern'` search files instead of waiting for input. Shell pipelines, input redirection, and heredocs still supply their own input normally.
+
+Set `stdin: "pipe"` at launch when you intend to send input through `process_write`:
+
+```json
+{"command":"cat","mode":"background","stdin":"pipe"}
+```
+
+This also works with `mode: "wait"`: steering can detach the command, then `process_write` can supply input. Detachment preserves the stdin setting; it does not enable input for commands started with `stdin: "ignore"`. Writable stdin cannot be enabled after launch.
+
+With `stdin: "pipe"`, file searches need an explicit path (for example, `rg 'pattern' .`), otherwise tools such as ripgrep can wait for stdin. `process_write` rejects commands started without writable stdin, as well as writes after EOF.
+
 ### Manage a detached process
 
 ```jsonc
@@ -59,7 +73,7 @@ Detached modes are available in TUI and RPC sessions. In Print and JSON sessions
 // Recover a reported omitted range or already-delivered bytes without consuming
 {"id":"p1","start":0,"length":4096} // process_read
 
-// Write exact stdin data; no newline is added
+// Write exact stdin data to a command started with stdin: "pipe"; no newline is added
 {"id":"p1","data":"yes\n"}          // process_write
 
 // Write and then send EOF
@@ -125,7 +139,7 @@ output
 
 ## Behavior and limits
 
-- Only macOS and Linux are supported. Process I/O uses pipes, not a PTY, so terminal-dependent or full-screen interactive programs are unsupported.
+- Only macOS and Linux are supported. Output and opt-in stdin use pipes, not a PTY, so terminal-dependent or full-screen interactive programs are unsupported.
 - One global fixed 200 ms window batches events from all processes.
 - Every detached process reports completion; monitor processes additionally report stdout activity.
 - Busy-agent batches are retained and delivered once after the turn settles.
@@ -144,4 +158,4 @@ npm pack --dry-run       # inspect the publishable package
 npm audit                # dependency vulnerability audit
 ```
 
-Automated coverage includes end-to-end process contracts, component width/invalidation checks, widget timer and disposal lifecycle, renderer collapse/expansion behavior, extension discovery, and real Pi TUI/RPC/print registration probes. Manual tmux testing is intentionally reserved for the dedicated manual-testing step.
+Tests require `rg` on PATH or in Pi's managed binary directory. Automated coverage includes stdin defaults and opt-in input, end-to-end process contracts, component width/invalidation checks, widget timer and disposal lifecycle, renderer collapse/expansion behavior, extension discovery, and real Pi TUI/RPC/print registration probes. Manual tmux testing is intentionally reserved for the dedicated manual-testing step.

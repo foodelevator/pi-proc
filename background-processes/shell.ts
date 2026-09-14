@@ -1,7 +1,4 @@
-import {
-  spawn,
-  type ChildProcessWithoutNullStreams,
-} from "node:child_process";
+import { spawn } from "node:child_process";
 import { delimiter, join } from "node:path";
 
 import {
@@ -10,7 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import type { OutputStore } from "./output-store";
-import type { PiSessionEnvironment } from "./types";
+import type { PiSessionEnvironment, ProcessExecution, ProcessStdinMode } from "./types";
 
 export const POST_EXIT_PIPE_IDLE_MS = 100;
 
@@ -77,6 +74,7 @@ export interface SpawnShellOptions {
   cwd: string;
   env: NodeJS.ProcessEnv;
   outputStore: OutputStore;
+  stdin?: ProcessStdinMode;
   shellPath?: string;
   /** Test seam; production callers should use Pi's getShellConfig resolution. */
   shellConfig?: ShellConfig;
@@ -89,7 +87,7 @@ export interface SpawnShellOptions {
 }
 
 export interface SpawnedShellProcess {
-  child: ChildProcessWithoutNullStreams;
+  child: ProcessExecution["child"];
   /** Resolves only after Node confirms that the executable was spawned. */
   spawned: Promise<number>;
   /** Resolves after exit and pipe end/close, or post-exit pipe idleness. */
@@ -178,6 +176,7 @@ export function spawnShellProcess(
 
   const processGroupTracker = options.detachedProcessGroupTracker
     ?? defaultDetachedProcessGroupTracker;
+  // Node's overloads lose the fixed stdout/stderr types when stdin is a union.
   const child = spawn(
     shellConfig.shell,
     [...shellConfig.args, command],
@@ -185,11 +184,12 @@ export function spawnShellProcess(
       cwd: options.cwd,
       detached: true,
       env: options.env,
-      stdio: ["pipe", "pipe", "pipe"],
+      // Ending an empty pipe still makes rg search stdin instead of the cwd.
+      stdio: [options.stdin ?? "ignore", "pipe", "pipe"],
       windowsHide: true,
     },
-  );
-  child.stdin.on("error", () => {
+  ) as SpawnedShellProcess["child"];
+  child.stdin?.on("error", () => {
     // Individual writes observe errors themselves. This listener also prevents an
     // unhandled EPIPE when the process exits between caller writes.
   });

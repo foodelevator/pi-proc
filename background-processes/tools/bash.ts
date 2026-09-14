@@ -34,6 +34,12 @@ export const bashSchema = Type.Object({
         "Execution mode (default: wait). Use wait when no other work needs to happen while the command runs. Use background when useful work can happen concurrently, or for a persistent process whose output does not need immediate attention. Use monitor only when ongoing stdout activity must be observed and acted upon; never choose it merely because a command may take a long time. Background and monitor return a managed process ID immediately for deliberate management with process_read, process_write, process_kill, and process_list. Background processes automatically notify on completion; do not routinely poll them with process_read or sleep commands.",
     }),
   ),
+  stdin: Type.Optional(
+    StringEnum(["ignore", "pipe"] as const, {
+      description:
+        "Standard input (default: ignore). ignore connects stdin to /dev/null. Set pipe at launch only when you intend to send input with process_write; it stays writable if a wait is detached. Detachment does not enable stdin, and ignored stdin cannot be enabled later. Shell pipelines and input redirections work in either mode. With pipe, file searches such as rg need an explicit path (e.g. rg 'pattern' .) or they may wait for stdin.",
+    }),
+  ),
   timeout: Type.Optional(
     Type.Number({
       description: "Process-lifetime limit in seconds, from process start. Applies in all modes. Remains active after background/monitor returns or a wait is detached. On expiry, the entire process group is force-killed. Optional, default is no timeout.",
@@ -245,11 +251,12 @@ export function createBashTool(
   return {
     name: "bash",
     label: "bash",
-    description: `Execute a bash command in the current working directory. Mode defaults to wait. Mode guidance: use wait when no other work needs to happen while the command runs; use background when useful work can happen concurrently, or for a persistent process whose output does not need immediate attention; use monitor only when ongoing stdout activity must be observed and acted upon. Never choose monitor merely because a command may take a long time. Wait returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first), and streams updates. If the user sends a steering message while a wait is running or pending in the current assistant turn, the wait is converted to a managed background process and returns its output so far. Background and monitor start a retained managed process and return its process ID immediately; use process_read, process_write, process_kill, and process_list when deliberate management is needed. Background processes automatically notify on completion; monitor processes also notify on stdout activity, including combined unread stderr in the same globally batched message. Do not routinely poll managed processes with process_read or sleep commands. If wait output is truncated, full output is saved to a temp file. Optional timeouts apply in every mode. Shell-level &, nohup, and programs self-daemonization are not integrated: prefer to use mode instead.`,
+    description: `Execute a bash command in the current working directory. Mode defaults to wait. Stdin defaults to /dev/null; set stdin="pipe" at launch to enable process_write, including after steering detachment. Shell pipelines and input redirections work without this opt-in. Mode guidance: use wait when no other work needs to happen while the command runs; use background when useful work can happen concurrently, or for a persistent process whose output does not need immediate attention; use monitor only when ongoing stdout activity must be observed and acted upon. Never choose monitor merely because a command may take a long time. Wait returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first), and streams updates. If the user sends a steering message while a wait is running or pending in the current assistant turn, the wait is converted to a managed background process and returns its output so far. Background and monitor start a retained managed process and return its process ID immediately; use process_read, process_write, process_kill, and process_list when deliberate management is needed. Background processes automatically notify on completion; monitor processes also notify on stdout activity, including combined unread stderr in the same globally batched message. Do not routinely poll managed processes with process_read or sleep commands. If wait output is truncated, full output is saved to a temp file. Optional timeouts apply in every mode. Shell-level &, nohup, and programs self-daemonization are not integrated: prefer to use mode instead.`,
     promptSnippet:
       "Execute bash commands, optionally as managed background or monitor processes",
     promptGuidelines: [
       "Inspect PI_* environment variables if you need current model and session details.",
+      "bash stdin defaults to /dev/null. Set stdin=\"pipe\" only for commands that need later input via process_write; it cannot be enabled after launch. Detachment preserves the stdin setting.",
       "Choose wait or background based on whether useful work should happen concurrently, not based on command duration. Use monitor only when ongoing output must be observed and acted upon. Do not routinely poll managed processes; rely on automatic notifications unless the user explicitly requests a status check.",
       "Use bash mode background or monitor instead of shell-level &, nohup, or daemonization, then manage the returned ID with process_read, process_write, process_kill, and process_list.",
       "Never use timeout as a startup or readiness bound. For servers, watchers, GUI applications, and other persistent processes, normally omit it and bound readiness check separately, if such are needed.",
@@ -279,6 +286,7 @@ export function createBashTool(
       if (mode !== "wait") {
         const record = await manager.startManaged(params.command, {
           mode,
+          ...(params.stdin === undefined ? {} : { stdin: params.stdin }),
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
         });
         return startedProcessResult(record, params.timeout);
@@ -343,6 +351,7 @@ export function createBashTool(
 
       try {
         execution = await manager.startForeground(params.command, {
+          ...(params.stdin === undefined ? {} : { stdin: params.stdin }),
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
         });
         if (
