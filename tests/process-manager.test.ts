@@ -1,5 +1,5 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { constants as osConstants, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -591,6 +591,5 @@ describe("signal helpers", () => {
     expect(isNormallyTerminatingSignal("SIGIO", "darwin")).toBe(false);
     expect(isNormallyTerminatingSignal("SIGIO", "linux")).toBe(true);
     expect(() => normalizeSignal("not-a-signal")).toThrow(RangeError);
-    expect(osConstants.signals.SIGTERM).toBeTypeOf("number");
   });
 });

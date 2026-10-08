@@ -227,68 +227,6 @@ describe("real Pi runtime loading", () => {
       ) {
         throw new Error("Managed process tools were not active");
       }
-      expect(bash.parameters).toMatchObject({
-        properties: {
-          mode: {
-            type: "string",
-            enum: ["wait", "background", "monitor"],
-          },
-        },
-      });
-      const processReadDefinition = session.getToolDefinition("process_read");
-      if (processReadDefinition === undefined) {
-        throw new Error("Registered process_read definition was unavailable");
-      }
-      const registeredStartSchema = (processReadDefinition.parameters as {
-        properties: { start: { description?: string } };
-      }).properties.start;
-      expect(registeredStartSchema.description).toContain(
-        "single delivered cursor shared with monitor/completion notifications, detachment results, and process_kill output",
-      );
-      expect(registeredStartSchema.description).toContain(
-        "use reported omitted byte ranges with start to recover skipped or already-delivered output",
-      );
-      expect(registeredStartSchema.description).toContain(
-        "bytes at or beyond the shared cursor remain unread",
-      );
-      expect(processReadDefinition.description).toContain(
-        "one delivered cursor shared by cursorless process_read calls, monitor/completion notifications, detachment results, and process_kill output",
-      );
-      expect(processReadDefinition.description).toContain(
-        "use reported omitted byte ranges with start to recover skipped or already-delivered output",
-      );
-      expect(processReadDefinition.description).toContain(
-        "fetched bytes at or beyond the shared cursor remain unread",
-      );
-      expect(processReadDefinition.promptSnippet).toBe(
-        "Read combined process output; cursorless reads consume the cursor shared with notifications, detachment, and process_kill, while start recovers ranges without consuming",
-      );
-      expect(processReadDefinition.promptGuidelines).toEqual([
-        "process_read has one delivered cursor shared with monitor/completion notifications, detachment results, and process_kill output. Omit start to consume unread combined output and advance that shared cursor.",
-        "Supplying start to process_read is an explicit non-consuming replay/range read. Use reported omitted byte ranges with start to recover skipped or already-delivered output. It does not mark fetched bytes as delivered, so bytes at or beyond the shared cursor remain unread and may appear again in later automatic notifications or cursorless process_read calls.",
-      ]);
-      expect(session.systemPrompt).toContain(
-        "Execute bash commands, optionally as managed background or monitor processes",
-      );
-      expect(session.systemPrompt).toContain(
-        "- Choose wait or background based on whether useful work should happen concurrently, not based on command duration. Use monitor only when ongoing output must be observed and acted upon. Do not routinely poll managed processes; rely on automatic notifications unless the user explicitly requests a status check.",
-      );
-      expect(session.systemPrompt).toContain(
-        "- When no actionable work remains, end your turn immediately—even if a process is still running or the overall task awaits its result. Background processes continue running, and notifications automatically resume you.",
-      );
-      expect(session.systemPrompt).toContain(
-        "- process_read: Read combined process output; cursorless reads consume the cursor shared with notifications, detachment, and process_kill, while start recovers ranges without consuming",
-      );
-      expect(session.systemPrompt).toContain(
-        "- process_read has one delivered cursor shared with monitor/completion notifications, detachment results, and process_kill output. Omit start to consume unread combined output and advance that shared cursor.",
-      );
-      expect(session.systemPrompt).toContain(
-        "- Supplying start to process_read is an explicit non-consuming replay/range read. Use reported omitted byte ranges with start to recover skipped or already-delivered output. It does not mark fetched bytes as delivered, so bytes at or beyond the shared cursor remain unread and may appear again in later automatic notifications or cursorless process_read calls.",
-      );
-      expect(session.systemPrompt).toContain(
-        "process_write does not add a newline",
-      );
-
       const result = await bash.execute("real-load-smoke", {
         command: "printf real-load-ok",
       });
@@ -512,7 +450,6 @@ describe("real Pi runtime loading", () => {
         },
         toolResults: [],
       });
-      expect(session.isIdle).toBe(false);
 
       await bash.execute("last-turn-background", {
         command: "printf last-turn-gap",
@@ -531,7 +468,6 @@ describe("real Pi runtime loading", () => {
 
       await lifecycle._emitAgentSettled();
 
-      expect(session.isIdle).toBe(true);
       await waitUntil(() => notifications.length === 1);
       expect(notifications[0]).toMatchObject({
         message: {

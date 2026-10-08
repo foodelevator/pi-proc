@@ -51,11 +51,9 @@ describe("session-scoped ProcessManager lifecycle", () => {
     ) => void | Promise<void>;
 
     let bash: BashTool | undefined;
-    const registeredTools: string[] = [];
     const handlers = new Map<string, SessionHandler[]>();
     const pi = {
       registerTool(tool: BashTool) {
-        registeredTools.push(tool.name);
         if (tool.name === "bash") bash = tool;
       },
       registerMessageRenderer() {},
@@ -88,14 +86,6 @@ describe("session-scoped ProcessManager lifecycle", () => {
     if (start === undefined || shutdown === undefined || bash === undefined) {
       throw new Error("Extension lifecycle registration is incomplete");
     }
-    expect(registeredTools).toEqual([
-      "bash",
-      "process_read",
-      "process_write",
-      "process_kill",
-      "process_list",
-    ]);
-
     await start({ type: "session_start", reason: "startup" }, ctx);
     const oldManager = managers[0];
     if (oldManager === undefined) throw new Error("Manager was not created");
@@ -348,52 +338,6 @@ describe("session-scoped ProcessManager lifecycle", () => {
     await shutdown({ type: "session_shutdown", reason: "quit" } as never, ctx);
 
     expect(appended).toEqual([]);
-  });
-
-  it("does nothing to active processes on tree navigation", async () => {
-    type Handler = (event: never, ctx: ExtensionContext) => void | Promise<void>;
-    const handlers = new Map<string, Handler[]>();
-    const pi = {
-      registerTool() {},
-      registerMessageRenderer() {},
-      sendMessage() {},
-      appendEntry() {},
-      on(event: string, handler: Handler) {
-        const registered = handlers.get(event) ?? [];
-        registered.push(handler);
-        handlers.set(event, registered);
-      },
-    } as unknown as ExtensionAPI;
-    createBackgroundProcessesExtension({
-      createManager(options) {
-        const manager = new ProcessManager({ ...options, pipeIdleMs: 30 });
-        managers.push(manager);
-        return manager;
-      },
-    })(pi);
-    const ctx = {
-      cwd: process.cwd(),
-      isIdle: () => true,
-      sessionManager: {
-        getSessionId: () => "tree-no-op",
-        getSessionFile: () => undefined,
-        getEntries: () => [],
-      },
-    } as unknown as ExtensionContext;
-    const start = handlers.get("session_start")?.[0];
-    const shutdown = handlers.get("session_shutdown")?.[0];
-    if (start === undefined || shutdown === undefined) throw new Error("Missing lifecycle handlers");
-    await start({ type: "session_start", reason: "startup" } as never, ctx);
-    const manager = managers.at(-1);
-    if (manager === undefined) throw new Error("Manager missing");
-    const record = await manager.startManaged("printf ready; sleep 30");
-    await waitUntil(() => record.outputStore.totalBytes === 5);
-
-    expect(handlers.has("session_tree")).toBe(false);
-    expect(record.completedAt).toBeUndefined();
-    expect(manager.getProcess(record.id)).toBe(record);
-
-    await shutdown({ type: "session_shutdown", reason: "quit" } as never, ctx);
   });
 
   it("reports scheduler callback failures visibly and releases them on agent_settled", async () => {

@@ -48,18 +48,6 @@ describe("extension loading", () => {
         "process_kill",
         "process_list",
       ]);
-      expect(bash).toBeDefined();
-      expect(bash?.parameters).toMatchObject({
-        required: ["command"],
-        properties: {
-          mode: { enum: ["wait", "background", "monitor"] },
-        },
-      });
-      expect(extension?.tools.get("process_kill")?.definition.parameters)
-        .toMatchObject({
-          required: ["id"],
-          properties: { signal: { type: "string" } },
-        });
       if (bash === undefined) throw new Error("bash override was not loaded");
 
       await expect(

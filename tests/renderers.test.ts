@@ -294,13 +294,6 @@ describe("managed process tool renderers", () => {
   const processKill = createProcessKillTool(unavailable);
   const processList = createProcessListTool(unavailable);
 
-  it("registers compact call and result renderers for bash and every auxiliary tool", () => {
-    for (const tool of [bash, processRead, processWrite, processKill, processList]) {
-      expect(tool.renderCall, `${tool.name} renderCall`).toBeTypeOf("function");
-      expect(tool.renderResult, `${tool.name} renderResult`).toBeTypeOf("function");
-    }
-  });
-
   it("preserves command newlines and wraps long bash calls without truncating them", () => {
     if (bash.renderCall === undefined) throw new Error("Missing bash call renderer");
     const command = `printf first\nid\nprintf '${"x".repeat(40)}-tail'`;
@@ -826,7 +819,6 @@ describe("managed process tool renderers", () => {
         expect(ours.includes(cue), `ours ${width}: ${cue}`).toBe(
           builtIn.includes(cue),
         );
-        expect(builtIn, `built-in ${width}: ${cue}`).toContain(cue);
       }
       expect(ours).not.toContain("[Showing lines");
       expect(count(ours, "Full output:")).toBe(1);

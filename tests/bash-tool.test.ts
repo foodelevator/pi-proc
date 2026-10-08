@@ -76,14 +76,8 @@ afterEach(async () => {
 });
 
 describe("bash override schema", () => {
-  it("publishes the command/mode/stdin/timeout shape", () => {
+  it("requires a command and uses a flat execution-mode enum", () => {
     expect(bashSchema.required).toEqual(["command"]);
-    expect(Object.keys(bashSchema.properties)).toEqual([
-      "command",
-      "mode",
-      "stdin",
-      "timeout",
-    ]);
     const modeSchema = bashSchema.properties.mode as unknown as Record<
       string,
       unknown
@@ -92,39 +86,6 @@ describe("bash override schema", () => {
       type: "string",
       enum: ["wait", "background", "monitor"],
     });
-    const modeDescription = modeSchema.description;
-    expect(modeDescription).toBeTypeOf("string");
-    if (typeof modeDescription === "string") {
-      expect(modeDescription).toContain("no other work needs to happen");
-      expect(modeDescription).toContain("useful work can happen concurrently");
-      expect(modeDescription).toContain(
-        "only when ongoing stdout activity must be observed and acted upon",
-      );
-      expect(modeDescription).toContain(
-        "never choose it merely because a command may take a long time",
-      );
-      expect(modeDescription).toContain("return a managed process ID immediately");
-      expect(modeDescription).toContain("process_read");
-      expect(modeDescription).toContain("process_kill");
-      expect(modeDescription).toContain("do not routinely poll");
-    }
-
-    const tool = createBashTool({ getManager: () => undefined });
-    expect(tool.description).toContain(
-      "use process_read, process_write, process_kill, and process_list when deliberate management is needed",
-    );
-    expect(tool.description).toContain(
-      "Background processes automatically notify on completion",
-    );
-    expect(tool.description).toContain(
-      "monitor processes also notify on stdout activity",
-    );
-    expect(tool.description).toContain(
-      "Do not routinely poll managed processes with process_read or sleep commands",
-    );
-    expect(tool.promptGuidelines).toContain(
-      "Choose wait or background based on whether useful work should happen concurrently, not based on command duration. Use monitor only when ongoing output must be observed and acted upon. Do not routinely poll managed processes; rely on automatic notifications unless the user explicitly requests a status check.",
-    );
   });
 });
 

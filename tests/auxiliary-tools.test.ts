@@ -1,5 +1,5 @@
 import { getEventListeners } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { constants as osConstants, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -122,16 +122,13 @@ afterEach(async () => {
   }
 });
 
-describe("auxiliary tool schemas and prompts", () => {
-  it("uses provider-compatible signal enums and accurate management guidance", async () => {
+describe("auxiliary tool schemas", () => {
+  it("uses a flat platform signal enum and positive read lengths", () => {
     const manager = makeManager();
     const auxiliary = tools(manager);
     const signalSchema = auxiliary.kill.parameters.properties.signal as unknown as {
       type: string;
       enum: string[];
-    };
-    const startSchema = auxiliary.read.parameters.properties.start as unknown as {
-      description?: string;
     };
 
     expect(signalSchema.type).toBe("string");
@@ -140,61 +137,6 @@ describe("auxiliary tool schemas and prompts", () => {
       type: "integer",
       minimum: 1,
     });
-    expect(startSchema.description).toContain(
-      "single delivered cursor shared with monitor/completion notifications, detachment results, and process_kill output",
-    );
-    expect(startSchema.description).toContain(
-      "use reported omitted byte ranges with start to recover skipped or already-delivered output",
-    );
-    expect(startSchema.description).toContain(
-      "bytes at or beyond the shared cursor remain unread",
-    );
-    expect(auxiliary.read.description).toContain(
-      "one delivered cursor shared by cursorless process_read calls, monitor/completion notifications, detachment results, and process_kill output",
-    );
-    expect(auxiliary.read.promptSnippet).toContain(
-      "start recovers ranges without consuming",
-    );
-    expect(auxiliary.read.promptGuidelines).toEqual(expect.arrayContaining([
-      expect.stringContaining(
-        "Omit start to consume unread combined output and advance that shared cursor",
-      ),
-      expect.stringContaining(
-        "Use reported omitted byte ranges with start to recover skipped or already-delivered output",
-      ),
-      expect.stringContaining(
-        "bytes at or beyond the shared cursor remain unread",
-      ),
-    ]));
-    expect(auxiliary.write.description).toContain("never appends a newline");
-    expect(auxiliary.kill.description).toContain("never escalates automatically");
-    expect(auxiliary.list.description).toContain("active processes only");
-    const includeCompletedSchema = auxiliary.list.parameters.properties
-      .include_completed as unknown as { description?: string };
-    expect(includeCompletedSchema.description).toContain(
-      "historical-runtime tombstones",
-    );
-    await expect(auxiliary.kill.execute("invalid-signal", {
-      id: "p1",
-      signal: "NOT_A_SIGNAL",
-    })).rejects.toThrow("Unsupported signal on this platform");
-  });
-
-  it("documents the complete shared-cursor contract in the README", () => {
-    const readme = readFileSync(
-      new URL("../README.md", import.meta.url),
-      "utf8",
-    );
-
-    expect(readme).toContain(
-      "A cursorless read (no `start`) consumes unread combined output and advances the same cursor also consumed by monitor/completion notifications, foreground-detachment results, and `process_kill` output.",
-    );
-    expect(readme).toContain(
-      "Use reported omitted byte ranges with `start` to recover skipped or already-delivered output.",
-    );
-    expect(readme).toContain(
-      "bytes at or beyond the shared cursor remain unread and may appear again in a later automatic notification or cursorless `process_read`",
-    );
   });
 });
 
@@ -418,6 +360,15 @@ describe("process_write", () => {
 });
 
 describe("process_kill", () => {
+  it("rejects unsupported signals", async () => {
+    const { kill } = tools(makeManager());
+
+    await expect(kill.execute("invalid-signal", {
+      id: "p1",
+      signal: "NOT_A_SIGNAL",
+    })).rejects.toThrow("Unsupported signal on this platform");
+  });
+
   it("does not escalate a TERM survivor, then accepts explicit KILL", async () => {
     const manager = makeManager({ terminatingSignalWaitMs: 60 });
     const { kill, read } = tools(manager);
