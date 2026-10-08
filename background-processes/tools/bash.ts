@@ -258,6 +258,7 @@ export function createBashTool(
       "Inspect PI_* environment variables if you need current model and session details.",
       "bash stdin defaults to /dev/null. Set stdin=\"pipe\" only for commands that need later input via process_write; it cannot be enabled after launch. Detachment preserves the stdin setting.",
       "Choose wait or background based on whether useful work should happen concurrently, not based on command duration. Use monitor only when ongoing output must be observed and acted upon. Do not routinely poll managed processes; rely on automatic notifications unless the user explicitly requests a status check.",
+      "When no actionable work remains, end your turn immediately—even if a process is still running or the overall task awaits its result. Background processes continue running, and notifications automatically resume you.",
       "Use bash mode background or monitor instead of shell-level &, nohup, or daemonization, then manage the returned ID with process_read, process_write, process_kill, and process_list.",
       "Never use timeout as a startup or readiness bound. For servers, watchers, GUI applications, and other persistent processes, normally omit it and bound readiness check separately, if such are needed.",
     ],

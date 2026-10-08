@@ -274,6 +274,9 @@ describe("real Pi runtime loading", () => {
         "- Choose wait or background based on whether useful work should happen concurrently, not based on command duration. Use monitor only when ongoing output must be observed and acted upon. Do not routinely poll managed processes; rely on automatic notifications unless the user explicitly requests a status check.",
       );
       expect(session.systemPrompt).toContain(
+        "- When no actionable work remains, end your turn immediately—even if a process is still running or the overall task awaits its result. Background processes continue running, and notifications automatically resume you.",
+      );
+      expect(session.systemPrompt).toContain(
         "- process_read: Read combined process output; cursorless reads consume the cursor shared with notifications, detachment, and process_kill, while start recovers ranges without consuming",
       );
       expect(session.systemPrompt).toContain(
